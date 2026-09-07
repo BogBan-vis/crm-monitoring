@@ -1,0 +1,30 @@
+﻿# Python
+__pycache__/
+*.py[cod]
+*.pyd
+.venv/
+venv/
+
+# JARVIS local data
+models/*
+cache/*
+logs/*
+data/*
+
+# Local configuration / secrets
+config/*.local.*
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# Build
+build/
+dist/
+*.spec
+
+# OS
+Thumbs.db
+Desktop.ini
