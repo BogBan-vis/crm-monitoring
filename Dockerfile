@@ -8,4 +8,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY bot ./bot
 
-CMD ["python", "bot/bot.py"]
+CMD ["sh", "-c", "uvicorn bot.server:app --host 0.0.0.0 --port ${PORT:-10000} & python bot/bot.py"]
