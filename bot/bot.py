@@ -1,5 +1,4 @@
 import os
-import socket
 import urllib.request
 import json
 
@@ -24,7 +23,9 @@ SERVER_URL = os.getenv(
     "http://127.0.0.1:8000"
 )
 
-COMPUTER_ID = socket.gethostname()
+# Пока используем компьютер, с которого агент уже отправляет данные.
+# Позже заменим это на выбор компьютера из списка.
+COMPUTER_ID = "DESKTOP-JMPKV7V"
 
 
 def get_status():
@@ -55,87 +56,90 @@ def get_status():
 
 def format_status(result):
 
-    if result.get("status") != "not_found":
-
-        data = result.get(
-            "data",
-            {}
-        )
-
-        received_at = result.get(
-            "received_at",
-            "неизвестно"
-        )
-
-        cpu = data.get(
-            "cpu_percent"
-        )
-
-        ram = data.get(
-            "ram_percent"
-        )
-
-        ram_used = data.get(
-            "ram_used_gb"
-        )
-
-        ram_total = data.get(
-            "ram_total_gb"
-        )
-
-        connections = data.get(
-            "network_connections"
-        )
-
-        text = (
-            "🖥 CRM Monitoring\n\n"
-            f"Компьютер: "
-            f"{data.get('computer_id', 'неизвестно')}\n"
-            f"CPU: {cpu}%\n"
-            f"RAM: {ram}% "
-            f"({ram_used} / {ram_total} GB)\n"
-            f"Сетевые соединения: "
-            f"{connections}\n\n"
-            "Диски:\n"
-        )
-
-        disks = data.get(
-            "disks",
-            []
-        )
-
-        if disks:
-
-            for disk in disks:
-
-                text += (
-                    f"{disk.get('mountpoint')} — "
-                    f"{disk.get('used_gb')} / "
-                    f"{disk.get('total_gb')} GB "
-                    f"(свободно "
-                    f"{disk.get('free_gb')} GB)\n"
-                )
-
-        else:
-
-            text += "Нет данных\n"
-
-        text += (
-            f"\nПоследнее получение: "
-            f"{received_at}"
-        )
-
-        return text
-
     if result.get("status") == "not_found":
 
-        return "❌ Данных от агента пока нет."
+        return (
+            "❌ Данных от компьютера "
+            f"{COMPUTER_ID} пока нет."
+        )
 
-    return (
-        "❌ Не удалось получить данные "
-        "от сервера.\n\n"
-        f"{result.get('message', 'Неизвестная ошибка')}"
+    if result.get("status") == "error":
+
+        return (
+            "❌ Не удалось получить данные "
+            "от сервера.\n\n"
+            f"{result.get('message', 'Неизвестная ошибка')}"
+        )
+
+    data = result.get(
+        "data",
+        {}
     )
+
+    received_at = result.get(
+        "received_at",
+        "неизвестно"
+    )
+
+    cpu = data.get(
+        "cpu_percent"
+    )
+
+    ram = data.get(
+        "ram_percent"
+    )
+
+    ram_used = data.get(
+        "ram_used_gb"
+    )
+
+    ram_total = data.get(
+        "ram_total_gb"
+    )
+
+    connections = data.get(
+        "network_connections"
+    )
+
+    text = (
+        "🖥 CRM Monitoring\n\n"
+        f"Компьютер: "
+        f"{data.get('computer_id', COMPUTER_ID)}\n"
+        f"CPU: {cpu}%\n"
+        f"RAM: {ram}% "
+        f"({ram_used} / {ram_total} GB)\n"
+        f"Сетевые соединения: "
+        f"{connections}\n\n"
+        "Диски:\n"
+    )
+
+    disks = data.get(
+        "disks",
+        []
+    )
+
+    if disks:
+
+        for disk in disks:
+
+            text += (
+                f"{disk.get('mountpoint')} — "
+                f"{disk.get('used_gb')} / "
+                f"{disk.get('total_gb')} GB "
+                f"(свободно "
+                f"{disk.get('free_gb')} GB)\n"
+            )
+
+    else:
+
+        text += "Нет данных\n"
+
+    text += (
+        f"\nПоследнее получение: "
+        f"{received_at}"
+    )
+
+    return text
 
 
 def start_keyboard():
