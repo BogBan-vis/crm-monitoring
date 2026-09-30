@@ -17,7 +17,6 @@ from telegram.ext import (
     filters,
 )
 
-
 SERVER_URL = os.getenv(
     "SERVER_URL",
     "http://127.0.0.1:8000"
@@ -27,16 +26,16 @@ SERVER_URL = os.getenv(
 # Позже заменим это на выбор компьютера из списка.
 COMPUTER_ID = "DESKTOP-JMPKV7V"
 
+WINDOWS_AGENT_URL = (
+    "https://github.com/BogBan-vis/crm-monitoring/"
+    "releases/download/v1.0/CRM_Monitoring_Agent.exe"
+)
+
 
 def get_status():
-
-    url = (
-        f"{SERVER_URL}/api/status/"
-        f"{COMPUTER_ID}"
-    )
+    url = f"{SERVER_URL}/api/status/{COMPUTER_ID}"
 
     try:
-
         with urllib.request.urlopen(
             url,
             timeout=60
@@ -59,7 +58,7 @@ def format_status(result):
     if result.get("status") == "not_found":
 
         return (
-            "❌ Данных от компьютера "
+            f"❌ Данных от компьютера "
             f"{COMPUTER_ID} пока нет."
         )
 
@@ -71,35 +70,18 @@ def format_status(result):
             f"{result.get('message', 'Неизвестная ошибка')}"
         )
 
-    data = result.get(
-        "data",
-        {}
-    )
+    data = result.get("data", {})
 
     received_at = result.get(
         "received_at",
         "неизвестно"
     )
 
-    cpu = data.get(
-        "cpu_percent"
-    )
-
-    ram = data.get(
-        "ram_percent"
-    )
-
-    ram_used = data.get(
-        "ram_used_gb"
-    )
-
-    ram_total = data.get(
-        "ram_total_gb"
-    )
-
-    connections = data.get(
-        "network_connections"
-    )
+    cpu = data.get("cpu_percent")
+    ram = data.get("ram_percent")
+    ram_used = data.get("ram_used_gb")
+    ram_total = data.get("ram_total_gb")
+    connections = data.get("network_connections")
 
     text = (
         "🖥 CRM Monitoring\n\n"
@@ -108,8 +90,7 @@ def format_status(result):
         f"CPU: {cpu}%\n"
         f"RAM: {ram}% "
         f"({ram_used} / {ram_total} GB)\n"
-        f"Сетевые соединения: "
-        f"{connections}\n\n"
+        f"Сетевые соединения: {connections}\n\n"
         "Диски:\n"
     )
 
@@ -144,14 +125,8 @@ def format_status(result):
 
 def start_keyboard():
 
-    keyboard = [
-        [
-            "▶️ Запуск"
-        ]
-    ]
-
     return ReplyKeyboardMarkup(
-        keyboard,
+        [["▶️ Запуск"]],
         resize_keyboard=True,
         one_time_keyboard=False
     )
@@ -159,7 +134,7 @@ def start_keyboard():
 
 def main_menu():
 
-    keyboard = [
+    return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
                 "🪟 Windows",
@@ -172,16 +147,18 @@ def main_menu():
                 callback_data="os_linux"
             )
         ]
-    ]
-
-    return InlineKeyboardMarkup(
-        keyboard
-    )
+    ])
 
 
 def windows_menu():
 
-    keyboard = [
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "⬇️ Скачать Windows Agent",
+                url=WINDOWS_AGENT_URL
+            )
+        ],
         [
             InlineKeyboardButton(
                 "📊 Статус компьютера",
@@ -194,16 +171,12 @@ def windows_menu():
                 callback_data="back_main"
             )
         ]
-    ]
-
-    return InlineKeyboardMarkup(
-        keyboard
-    )
+    ])
 
 
 def linux_menu():
 
-    keyboard = [
+    return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
                 "Debian",
@@ -228,16 +201,12 @@ def linux_menu():
                 callback_data="back_main"
             )
         ]
-    ]
-
-    return InlineKeyboardMarkup(
-        keyboard
-    )
+    ])
 
 
 async def start(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    update,
+    context
 ):
 
     await update.message.reply_text(
@@ -247,8 +216,8 @@ async def start(
 
 
 async def text_handler(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    update,
+    context
 ):
 
     if update.message.text == "▶️ Запуск":
@@ -260,8 +229,8 @@ async def text_handler(
 
 
 async def button_handler(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    update,
+    context
 ):
 
     query = update.callback_query
@@ -308,66 +277,54 @@ async def button_handler(
 
     elif query.data == "linux_debian":
 
-        keyboard = [
-            [
-                InlineKeyboardButton(
-                    "⬅️ Назад",
-                    callback_data="os_linux"
-                )
-            ]
-        ]
-
         await query.edit_message_text(
             "🐧 Debian\n\n"
             "Пакет .deb будет добавлен позже.",
-            reply_markup=InlineKeyboardMarkup(
-                keyboard
-            )
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "⬅️ Назад",
+                        callback_data="os_linux"
+                    )
+                ]
+            ])
         )
 
     elif query.data == "linux_astra":
-
-        keyboard = [
-            [
-                InlineKeyboardButton(
-                    "⬅️ Назад",
-                    callback_data="os_linux"
-                )
-            ]
-        ]
 
         await query.edit_message_text(
             "🐧 Astra Linux\n\n"
             "Пакет для Astra Linux будет "
             "добавлен позже.",
-            reply_markup=InlineKeyboardMarkup(
-                keyboard
-            )
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "⬅️ Назад",
+                        callback_data="os_linux"
+                    )
+                ]
+            ])
         )
 
     elif query.data == "linux_ubuntu":
 
-        keyboard = [
-            [
-                InlineKeyboardButton(
-                    "⬅️ Назад",
-                    callback_data="os_linux"
-                )
-            ]
-        ]
-
         await query.edit_message_text(
             "🐧 Ubuntu\n\n"
             "Пакет .deb будет добавлен позже.",
-            reply_markup=InlineKeyboardMarkup(
-                keyboard
-            )
+            reply_markup=InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "⬅️ Назад",
+                        callback_data="os_linux"
+                    )
+                ]
+            ])
         )
 
 
 async def ignore_other_messages(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
+    update,
+    context
 ):
 
     return
@@ -383,7 +340,8 @@ def main():
 
         print(
             "Ошибка: переменная "
-            "TELEGRAM_BOT_TOKEN не установлена."
+            "TELEGRAM_BOT_TOKEN "
+            "не установлена."
         )
 
         return
