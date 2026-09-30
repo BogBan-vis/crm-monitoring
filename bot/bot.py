@@ -28,7 +28,7 @@ COMPUTER_ID = "DESKTOP-JMPKV7V"
 
 WINDOWS_AGENT_URL = (
     "https://github.com/BogBan-vis/crm-monitoring/"
-    "releases/download/v1.0/CRM_Monitoring_Agent.exe"
+    "releases/download/v1.1/CRM_Monitoring_Agent.exe"
 )
 
 
