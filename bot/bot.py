@@ -1,5 +1,6 @@
 import os
 import urllib.request
+import urllib.parse
 import json
 
 from telegram import (
@@ -17,7 +18,6 @@ from telegram.ext import (
     filters,
 )
 
-
 SERVER_URL = os.getenv(
     "SERVER_URL",
     "http://127.0.0.1:8000"
@@ -25,33 +25,45 @@ SERVER_URL = os.getenv(
 
 API_SECRET = os.getenv("API_SECRET")
 
-COMPUTER_ID = "DESKTOP-JMPKV7V"
-
 WINDOWS_AGENT_URL = (
     "https://github.com/BogBan-vis/crm-monitoring/"
     "releases/download/v1.1/CRM_Monitoring_Agent.exe"
 )
 
 
-def get_status():
-    if not API_SECRET:
-        return {
-            "status": "error",
-            "message": "API_SECRET не настроен на сервере."
-        }
+def server_request(
+    path,
+    method="GET",
+    body=None,
+    authorization=None
+):
+    url = f"{SERVER_URL}{path}"
 
-    url = f"{SERVER_URL}/api/status/{COMPUTER_ID}"
+    headers = {}
+
+    if authorization:
+        headers["Authorization"] = (
+            f"Bearer {authorization}"
+        )
+
+    data = None
+
+    if body is not None:
+        data = json.dumps(body).encode("utf-8")
+        headers["Content-Type"] = "application/json"
 
     request = urllib.request.Request(
         url,
-        headers={
-            "Authorization": f"Bearer {API_SECRET}"
-        },
-        method="GET"
+        data=data,
+        headers=headers,
+        method=method
     )
 
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with urllib.request.urlopen(
+            request,
+            timeout=60
+        ) as response:
             return json.loads(
                 response.read().decode("utf-8")
             )
@@ -63,21 +75,46 @@ def get_status():
         }
 
 
+def get_user_status(telegram_id):
+    if not API_SECRET:
+        return {
+            "status": "error",
+            "message": "API_SECRET не настроен."
+        }
+
+    return server_request(
+        f"/api/user/status/{telegram_id}",
+        authorization=API_SECRET
+    )
+
+
 def format_status(result):
+    if result.get("status") == "not_linked":
+        return (
+            "❌ Компьютер ещё не привязан "
+            "к этому Telegram-аккаунту."
+        )
+
     if result.get("status") == "not_found":
         return (
-            f"❌ Данных от компьютера "
-            f"{COMPUTER_ID} пока нет."
+            "⏳ Компьютер привязан, но сервер "
+            "ещё не получил от него данные."
         )
 
     if result.get("status") == "error":
         return (
-            "❌ Не удалось получить данные от сервера.\n\n"
+            "❌ Ошибка сервера.\n\n"
             f"{result.get('message', 'Неизвестная ошибка')}"
         )
 
-    data = result.get("data", {})
-    received_at = result.get(
+    computer_id = result.get(
+        "computer_id",
+        "неизвестно"
+    )
+
+    saved = result.get("data", {})
+    data = saved.get("data", {})
+    received_at = saved.get(
         "received_at",
         "неизвестно"
     )
@@ -92,8 +129,7 @@ def format_status(result):
 
     text = (
         "🖥 CRM Monitoring\n\n"
-        f"Компьютер: "
-        f"{data.get('computer_id', COMPUTER_ID)}\n"
+        f"Компьютер: {computer_id}\n"
         f"CPU: {cpu}%\n"
         f"RAM: {ram}% "
         f"({ram_used} / {ram_total} GB)\n"
@@ -143,6 +179,12 @@ def main_menu():
             InlineKeyboardButton(
                 "🐧 Linux",
                 callback_data="os_linux"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🔗 Привязать компьютер",
+                callback_data="pair"
             )
         ]
     ])
@@ -200,24 +242,35 @@ def linux_menu():
     ])
 
 
-async def start(update, context):
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
     await update.message.reply_text(
         "CRM Monitoring Bot",
         reply_markup=start_keyboard()
     )
 
 
-async def text_handler(update, context):
+async def text_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
     if update.message.text == "▶️ Запуск":
         await update.message.reply_text(
-            "Выберите операционную систему:",
+            "Выберите действие:",
             reply_markup=main_menu()
         )
 
 
-async def button_handler(update, context):
+async def button_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
     query = update.callback_query
     await query.answer()
+
+    telegram_id = str(query.from_user.id)
 
     if query.data == "os_windows":
         await query.edit_message_text(
@@ -235,21 +288,30 @@ async def button_handler(update, context):
 
     elif query.data == "status":
         await query.edit_message_text(
-            "⏳ Подключение к серверу...\n"
-            "Если сервер спит, это может занять "
-            "до примерно 1 минуты."
+            "⏳ Получение данных..."
         )
 
-        result = get_status()
+        result = get_user_status(
+            telegram_id
+        )
 
         await query.edit_message_text(
             format_status(result),
-            reply_markup=windows_menu()
+            reply_markup=main_menu()
+        )
+
+    elif query.data == "pair":
+        context.user_data["waiting_pair_code"] = True
+
+        await query.edit_message_text(
+            "🔗 Привязка компьютера\n\n"
+            "Введите одноразовый код, который "
+            "был создан для этого компьютера."
         )
 
     elif query.data == "back_main":
         await query.edit_message_text(
-            "Выберите операционную систему:",
+            "Выберите действие:",
             reply_markup=main_menu()
         )
 
@@ -296,12 +358,70 @@ async def button_handler(update, context):
         )
 
 
-async def ignore_other_messages(update, context):
+async def pairing_code_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    if not context.user_data.get(
+        "waiting_pair_code"
+    ):
+        return
+
+    code = update.message.text.strip()
+
+    if not code.isdigit() or len(code) != 6:
+        await update.message.reply_text(
+            "❌ Код должен состоять из 6 цифр."
+        )
+        return
+
+    telegram_id = str(
+        update.effective_user.id
+    )
+
+    result = server_request(
+        "/api/pairing/confirm",
+        method="POST",
+        body={
+            "telegram_id": telegram_id,
+            "code": code
+        }
+    )
+
+    if result.get("status") == "ok":
+        context.user_data[
+            "waiting_pair_code"
+        ] = False
+
+        computer_id = result.get(
+            "computer_id",
+            "неизвестно"
+        )
+
+        await update.message.reply_text(
+            "✅ Компьютер успешно привязан.\n\n"
+            f"Компьютер: {computer_id}",
+            reply_markup=start_keyboard()
+        )
+
+    else:
+        await update.message.reply_text(
+            "❌ Не удалось привязать компьютер.\n\n"
+            f"{result.get('message', 'Неверный код.')}"
+        )
+
+
+async def ignore_other_messages(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
     return
 
 
 def main():
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    token = os.getenv(
+        "TELEGRAM_BOT_TOKEN"
+    )
 
     if not token:
         print(
@@ -327,8 +447,17 @@ def main():
     application.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
+            pairing_code_handler
+        ),
+        group=0
+    )
+
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
             text_handler
-        )
+        ),
+        group=1
     )
 
     application.add_handler(
