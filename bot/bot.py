@@ -103,7 +103,7 @@ def main_menu():
 
         [
             InlineKeyboardButton(
-                "📥 Скачать агент",
+                "📥 Скачать агента",
                 callback_data="downloads"
             )
         ],
