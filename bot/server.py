@@ -36,16 +36,25 @@ def create_pc_token(computer_id: str):
     return base64.urlsafe_b64encode(raw).decode("utf-8")
 
 
-def check_pc_token(computer_id: str, token: str | None):
+def check_pc_token(
+    computer_id: str,
+    token: str | None
+):
     if not API_SECRET or not token:
         return False
+
+    if token.startswith("Bearer "):
+        token = token[7:]
 
     try:
         raw = base64.urlsafe_b64decode(
             token.encode("utf-8")
         ).decode("utf-8")
 
-        token_computer_id, signature = raw.rsplit(":", 1)
+        token_computer_id, signature = raw.rsplit(
+            ":",
+            1
+        )
 
     except Exception:
         return False
@@ -66,10 +75,16 @@ def check_pc_token(computer_id: str, token: str | None):
 
 
 def check_admin(authorization):
-    if not API_SECRET:
+    if not API_SECRET or not authorization:
         return False
 
-    return authorization == f"Bearer {API_SECRET}"
+    if authorization.startswith("Bearer "):
+        authorization = authorization[7:]
+
+    return hmac.compare_digest(
+        authorization,
+        API_SECRET
+    )
 
 
 @app.post("/api/admin/provision")
