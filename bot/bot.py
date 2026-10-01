@@ -17,60 +17,71 @@ SERVER_URL = os.getenv(
 
 API_SECRET = os.getenv("API_SECRET")
 
-
 WINDOWS_AGENT_URL = (
     "https://github.com/BogBan-vis/crm-monitoring"
     "/releases/download/v1.1/CRM_Monitoring_Agent.exe"
 )
 
 
-def server_request(method, path, data=None, admin=False):
-
-    url = SERVER_URL + path
+def server_request(
+    method,
+    path,
+    data=None,
+    admin=False
+):
+    url = f"{SERVER_URL}{path}"
 
     headers = {
         "Content-Type": "application/json"
     }
 
-    if admin:
-        headers["Authorization"] = f"Bearer {API_SECRET}"
+    if admin and API_SECRET:
+        headers["Authorization"] = (
+            f"Bearer {API_SECRET}"
+        )
 
-    body = None
+    request_data = None
 
     if data is not None:
-        body = json.dumps(data).encode("utf-8")
+        request_data = json.dumps(
+            data
+        ).encode("utf-8")
 
     request = urllib.request.Request(
         url,
-        data=body,
+        data=request_data,
         headers=headers,
         method=method
     )
 
     try:
-
         with urllib.request.urlopen(
             request,
-            timeout=10
+            timeout=15
         ) as response:
 
-            return json.loads(
-                response.read().decode("utf-8")
+            raw = response.read().decode(
+                "utf-8"
             )
+
+            if not raw:
+                return {}
+
+            return json.loads(raw)
 
     except urllib.error.HTTPError as error:
 
         try:
+            raw = error.read().decode(
+                "utf-8"
+            )
 
-            body = error.read().decode("utf-8")
-
-            return json.loads(body)
+            return json.loads(raw)
 
         except Exception:
-
             return {
                 "status": "error",
-                "message": f"HTTP {error.code}"
+                "message": str(error)
             }
 
     except Exception as error:
@@ -87,7 +98,6 @@ async def server_request_async(
     data=None,
     admin=False
 ):
-
     return await asyncio.to_thread(
         server_request,
         method,
@@ -100,245 +110,358 @@ async def server_request_async(
 def main_menu():
 
     keyboard = [
-
         [
             InlineKeyboardButton(
-                "📥 Скачать агента",
+                "▶️ Запустить",
+                callback_data="start_agent"
+            ),
+            InlineKeyboardButton(
+                "⏹ Остановить",
+                callback_data="stop_agent"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "📥 Скачать агент",
                 callback_data="downloads"
             )
         ],
-
         [
             InlineKeyboardButton(
                 "🔗 Привязать компьютер",
                 callback_data="pair"
             )
         ],
-
         [
             InlineKeyboardButton(
                 "💻 Мой компьютер",
-                callback_data="status"
+                callback_data="my_pc"
             )
         ],
-
         [
             InlineKeyboardButton(
                 "ℹ️ Информация",
                 callback_data="info"
             )
         ]
-
     ]
 
-    return InlineKeyboardMarkup(keyboard)
+    return InlineKeyboardMarkup(
+        keyboard
+    )
 
 
 def downloads_menu():
 
     keyboard = [
-
         [
             InlineKeyboardButton(
                 "🪟 Windows",
-                callback_data="windows_download"
+                callback_data="os_windows"
             )
         ],
-
         [
             InlineKeyboardButton(
                 "🐧 Linux",
-                callback_data="linux_download"
+                callback_data="os_linux"
             )
         ],
-
         [
             InlineKeyboardButton(
-                "◀️ Назад",
-                callback_data="back"
+                "⬅️ Назад",
+                callback_data="back_main"
             )
         ]
-
     ]
 
-    return InlineKeyboardMarkup(keyboard)
+    return InlineKeyboardMarkup(
+        keyboard
+    )
 
 
 def linux_menu():
 
     keyboard = [
-
         [
             InlineKeyboardButton(
-                "📦 Debian / Ubuntu",
-                callback_data="linux_deb"
+                "Debian",
+                callback_data="linux_debian"
             )
         ],
-
         [
             InlineKeyboardButton(
-                "◀️ Назад",
+                "Astra Linux",
+                callback_data="linux_astra"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "Ubuntu",
+                callback_data="linux_ubuntu"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "⬅️ Назад",
                 callback_data="downloads"
             )
         ]
-
     ]
 
-    return InlineKeyboardMarkup(keyboard)
-
-
-async def start(update, context):
-
-    context.user_data[
-        "waiting_pairing_code"
-    ] = False
-
-    await update.message.reply_text(
-
-        "🖥 CRM Monitoring\n\n"
-        "Управление мониторингом компьютера.",
-
-        reply_markup=main_menu()
+    return InlineKeyboardMarkup(
+        keyboard
     )
 
 
-async def button(update, context):
+async def edit_message(
+    query,
+    text,
+    reply_markup=None
+):
+    try:
+        await query.edit_message_text(
+            text=text,
+            reply_markup=reply_markup
+        )
 
+    except Exception as error:
+
+        if "Message is not modified" not in str(
+            error
+        ):
+            raise
+
+
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    text = (
+        "🤖 CRM Monitoring\n\n"
+        "Выберите действие:"
+    )
+
+    if update.message:
+
+        await update.message.reply_text(
+            text,
+            reply_markup=main_menu()
+        )
+
+    elif update.callback_query:
+
+        await edit_message(
+            update.callback_query,
+            text,
+            main_menu()
+        )
+
+
+async def button(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
     query = update.callback_query
 
     await query.answer()
 
+    data = query.data
 
-    if query.data == "downloads":
+    if data == "back_main":
 
-        await query.message.reply_text(
-
-            "📥 Скачать агент\n\n"
-            "Выберите операционную систему.",
-
-            reply_markup=downloads_menu()
+        await edit_message(
+            query,
+            "🤖 CRM Monitoring\n\n"
+            "Выберите действие:",
+            main_menu()
         )
 
         return
 
 
-    if query.data == "windows_download":
+    if data == "downloads":
+
+        await edit_message(
+            query,
+            "📥 Скачать агент\n\n"
+            "Выберите операционную систему:",
+            downloads_menu()
+        )
+
+        return
+
+
+    if data == "os_windows":
 
         keyboard = [
-
             [
                 InlineKeyboardButton(
                     "⬇️ Скачать Windows Agent",
                     url=WINDOWS_AGENT_URL
                 )
             ],
-
             [
                 InlineKeyboardButton(
-                    "◀️ Назад",
+                    "⬅️ Назад",
                     callback_data="downloads"
                 )
             ]
-
         ]
 
-        await query.message.reply_text(
-
+        await edit_message(
+            query,
             "🪟 Windows\n\n"
-            "Нажмите кнопку ниже для загрузки агента.",
-
-            reply_markup=InlineKeyboardMarkup(
-                keyboard
-            )
+            "Нажмите кнопку ниже для скачивания агента.",
+            InlineKeyboardMarkup(keyboard)
         )
 
         return
 
 
-    if query.data == "linux_download":
+    if data == "os_linux":
 
-        await query.message.reply_text(
-
+        await edit_message(
+            query,
             "🐧 Linux\n\n"
-            "Выберите вариант.",
-
-            reply_markup=linux_menu()
+            "Выберите дистрибутив:",
+            linux_menu()
         )
 
         return
 
 
-    if query.data == "linux_deb":
+    if data == "linux_debian":
 
-        await query.message.reply_text(
-
-            "🐧 Linux\n\n"
-            "Пакет агента для Debian / Ubuntu "
-            "пока не опубликован.",
-
-            reply_markup=linux_menu()
+        await edit_message(
+            query,
+            "Пакет .deb будет добавлен позже.",
+            linux_menu()
         )
 
         return
 
 
-    if query.data == "pair":
+    if data == "linux_ubuntu":
+
+        await edit_message(
+            query,
+            "Пакет .deb будет добавлен позже.",
+            linux_menu()
+        )
+
+        return
+
+
+    if data == "linux_astra":
+
+        await edit_message(
+            query,
+            "Пакет для Astra Linux будет добавлен позже.",
+            linux_menu()
+        )
+
+        return
+
+
+    if data == "pair":
+
+        await edit_message(
+            query,
+            "🔗 Привязка компьютера\n\n"
+            "Введите 6-значный код, который "
+            "показывает агент на компьютере.",
+            InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "⬅️ Назад",
+                        callback_data="back_main"
+                    )
+                ]
+            ])
+        )
 
         context.user_data[
             "waiting_pairing_code"
         ] = True
 
-        await query.message.reply_text(
-
-            "🔗 Привязка компьютера\n\n"
-            "1. Запустите агент на компьютере.\n"
-            "2. Нажмите «Получить код привязки».\n"
-            "3. Введите сюда полученные 6 цифр."
-
-        )
-
         return
 
 
-    if query.data == "status":
+    if data == "my_pc":
 
         await show_status(
-            query.message,
-            query.from_user.id
+            query,
+            context
         )
 
         return
 
 
-    if query.data == "info":
+    if data == "info":
 
-        await query.message.reply_text(
-
-            "CRM Monitoring\n\n"
-            "Компьютер отправляет только последнее "
-            "состояние.\n"
-            "История мониторинга не хранится.",
-
-            reply_markup=main_menu()
+        await edit_message(
+            query,
+            "ℹ️ Информация\n\n"
+            "CRM Monitoring — система "
+            "мониторинга компьютеров.\n\n"
+            "Агент отправляет на сервер "
+            "актуальное состояние ПК.\n\n"
+            "История данных не хранится.",
+            InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "⬅️ Назад",
+                        callback_data="back_main"
+                    )
+                ]
+            ])
         )
 
         return
 
 
-    if query.data == "back":
+    if data == "start_agent":
 
-        await query.message.reply_text(
-
-            "🖥 CRM Monitoring",
-
-            reply_markup=main_menu()
+        await edit_message(
+            query,
+            "▶️ Запуск агента\n\n"
+            "Команда запуска отправлена.",
+            InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "⬅️ Назад",
+                        callback_data="back_main"
+                    )
+                ]
+            ])
         )
 
         return
 
 
-async def pairing_code(update, context):
+    if data == "stop_agent":
 
+        await edit_message(
+            query,
+            "⏹ Остановка агента\n\n"
+            "Команда остановки отправлена.",
+            InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "⬅️ Назад",
+                        callback_data="back_main"
+                    )
+                ]
+            ])
+        )
+
+        return
+
+
+async def pairing_code(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
     if not context.user_data.get(
         "waiting_pairing_code"
     ):
@@ -346,10 +469,10 @@ async def pairing_code(update, context):
 
     code = update.message.text.strip()
 
-    if len(code) != 6 or not code.isdigit():
+    if not code.isdigit() or len(code) != 6:
 
         await update.message.reply_text(
-            "Код должен состоять ровно из 6 цифр."
+            "Введите корректный 6-значный код."
         )
 
         return
@@ -359,32 +482,32 @@ async def pairing_code(update, context):
     )
 
     result = await server_request_async(
-
         "POST",
-
         "/api/pairing/confirm",
-
         {
             "telegram_id": telegram_id,
             "code": code
         }
-
     )
-
-    if result.get("status") != "ok":
-
-        await update.message.reply_text(
-
-            "❌ Код недействителен или уже использован.",
-
-            reply_markup=main_menu()
-        )
-
-        return
 
     context.user_data[
         "waiting_pairing_code"
     ] = False
+
+    if result.get("status") != "ok":
+
+        await update.message.reply_text(
+            "❌ Не удалось привязать компьютер:\n"
+            + str(
+                result.get(
+                    "message",
+                    "Неизвестная ошибка"
+                )
+            ),
+            reply_markup=main_menu()
+        )
+
+        return
 
     computer_id = result.get(
         "computer_id",
@@ -392,61 +515,101 @@ async def pairing_code(update, context):
     )
 
     await update.message.reply_text(
-
         "✅ Компьютер успешно привязан.\n\n"
-        f"ID компьютера: {computer_id}",
-
+        f"ID: {computer_id}",
         reply_markup=main_menu()
     )
 
 
-async def show_status(message, telegram_id):
+async def show_status(
+    query,
+    context
+):
+    telegram_id = str(
+        query.from_user.id
+    )
 
     result = await server_request_async(
-
         "GET",
-
         f"/api/user/status/{telegram_id}",
-
         admin=True
     )
 
-    status = result.get("status")
+    if result.get("status") == "not_linked":
 
-
-    if status == "not_linked":
-
-        await message.reply_text(
-
+        await edit_message(
+            query,
+            "💻 Мой компьютер\n\n"
             "Компьютер ещё не привязан.",
-
-            reply_markup=main_menu()
+            InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "🔗 Привязать компьютер",
+                        callback_data="pair"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "⬅️ Назад",
+                        callback_data="back_main"
+                    )
+                ]
+            ])
         )
 
         return
 
 
-    if status == "not_found":
+    if result.get("status") == "not_found":
 
-        await message.reply_text(
+        computer_id = result.get(
+            "computer_id",
+            "неизвестно"
+        )
 
-            "Компьютер привязан, "
-            "но данные от него ещё не получены.",
-
-            reply_markup=main_menu()
+        await edit_message(
+            query,
+            "💻 Мой компьютер\n\n"
+            f"ID: {computer_id}\n\n"
+            "Данные от компьютера ещё не получены.",
+            InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "🔄 Обновить",
+                        callback_data="my_pc"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "⬅️ Назад",
+                        callback_data="back_main"
+                    )
+                ]
+            ])
         )
 
         return
 
 
-    if status != "ok":
+    if result.get("status") != "ok":
 
-        await message.reply_text(
-
-            "❌ Не удалось получить состояние компьютера.\n\n"
-            f"Ошибка: {result.get('message', 'неизвестная ошибка')}",
-
-            reply_markup=main_menu()
+        await edit_message(
+            query,
+            "❌ Не удалось получить состояние компьютера.",
+            InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton(
+                        "🔄 Повторить",
+                        callback_data="my_pc"
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        "⬅️ Назад",
+                        callback_data="back_main"
+                    )
+                ]
+            ])
         )
 
         return
@@ -466,7 +629,6 @@ async def show_status(message, telegram_id):
         "data",
         {}
     )
-
 
     hostname = data.get(
         "hostname",
@@ -507,24 +669,44 @@ async def show_status(message, telegram_id):
     )
 
 
-    text = (
-        "💻 Мой компьютер\n\n"
-        f"ID: {computer_id}\n"
-        f"Имя Windows: {hostname}\n\n"
-        f"CPU: {cpu}%\n"
-        f"Потоки CPU: {threads}\n"
-        f"RAM: {ram}%"
-    )
+    if isinstance(cpu, (int, float)):
+
+        cpu_text = f"{cpu:.1f}%"
+
+    else:
+
+        cpu_text = str(cpu)
 
 
-    if ram_used is not None and ram_total is not None:
+    if isinstance(ram, (int, float)):
 
-        text += (
-            f" ({ram_used} / {ram_total} GB)"
+        ram_text = f"{ram:.1f}%"
+
+    else:
+
+        ram_text = str(ram)
+
+
+    if (
+        isinstance(ram_used, (int, float))
+        and isinstance(ram_total, (int, float))
+    ):
+
+        ram_text += (
+            f" ({ram_used:.2f} / "
+            f"{ram_total:.2f} GB)"
         )
 
 
-    text += "\n\n💾 Диски:\n"
+    text = (
+        "💻 Мой компьютер\n\n"
+        f"ID: {computer_id}\n"
+        f"Имя: {hostname}\n\n"
+        f"CPU: {cpu_text}\n"
+        f"Потоки CPU: {threads}\n"
+        f"RAM: {ram_text}\n\n"
+        "💾 Диски:\n"
+    )
 
 
     if disks:
@@ -562,33 +744,52 @@ async def show_status(message, telegram_id):
             )
 
             text += (
-                f"\n{device} {mountpoint}\n"
+                f"\n{device} "
+                f"({mountpoint})\n"
                 f"  Всего: {total} GB\n"
-                f"  Занято: {used} GB ({percent}%)\n"
+                f"  Занято: {used} GB "
+                f"({percent}%)\n"
                 f"  Свободно: {free} GB\n"
             )
 
     else:
 
-        text += "Нет данных о дисках.\n"
+        text += "\nДиски не обнаружены.\n"
 
 
     text += (
-        f"\n🕒 Последние данные:\n"
+        "\n🕒 Последние данные:\n"
         f"{received_at}"
     )
 
 
-    await message.reply_text(
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "🔄 Обновить",
+                callback_data="my_pc"
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "⬅️ Назад",
+                callback_data="back_main"
+            )
+        ]
+    ]
 
+
+    await edit_message(
+        query,
         text,
-
-        reply_markup=main_menu()
+        InlineKeyboardMarkup(keyboard)
     )
 
 
-async def error_handler(update, context):
-
+async def error_handler(
+    update: object,
+    context: ContextTypes.DEFAULT_TYPE
+):
     print(
         "Telegram error:",
         context.error
