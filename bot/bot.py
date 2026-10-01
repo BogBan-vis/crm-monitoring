@@ -1,4 +1,3 @@
-```python
 import os
 import json
 import asyncio
@@ -397,4 +396,3 @@ async def error_handler(
         "Telegram error:",
         context.error
     )
-```
