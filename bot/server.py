@@ -5,7 +5,24 @@ import hmac
 import secrets
 from datetime import datetime
 
-from fastapi import FastAPI, Header
+from fastapi import FastAPI, Header, Request
+from telegram import Update
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
+)
+
+from bot.bot import (
+    BOT_TOKEN,
+    SERVER_URL,
+    start,
+    button,
+    pairing_code,
+    error_handler,
+)
 
 
 app = FastAPI(title="CRM Monitoring Server")
@@ -15,6 +32,8 @@ API_SECRET = os.getenv("API_SECRET")
 latest_data = {}
 telegram_links = {}
 pairing_codes = {}
+
+telegram_app = None
 
 
 def create_pc_token(computer_id):
@@ -77,6 +96,95 @@ def check_admin(authorization):
     )
 
 
+@app.on_event("startup")
+async def startup():
+    global telegram_app
+
+    if not BOT_TOKEN:
+        raise RuntimeError(
+            "TELEGRAM_BOT_TOKEN is not configured"
+        )
+
+    if not API_SECRET:
+        raise RuntimeError(
+            "API_SECRET is not configured"
+        )
+
+    telegram_app = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .updater(None)
+        .build()
+    )
+
+    telegram_app.add_handler(
+        CommandHandler(
+            "start",
+            start
+        )
+    )
+
+    telegram_app.add_handler(
+        CallbackQueryHandler(
+            button
+        )
+    )
+
+    telegram_app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            pairing_code
+        )
+    )
+
+    telegram_app.add_error_handler(
+        error_handler
+    )
+
+    await telegram_app.initialize()
+    await telegram_app.start()
+
+    await telegram_app.bot.set_webhook(
+        url=f"{SERVER_URL}/telegram/webhook",
+        drop_pending_updates=True
+    )
+
+    print("Telegram webhook configured")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    global telegram_app
+
+    if telegram_app is not None:
+        await telegram_app.stop()
+        await telegram_app.shutdown()
+
+        telegram_app = None
+
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    if telegram_app is None:
+        return {
+            "status": "error",
+            "message": "Telegram bot is not initialized"
+        }
+
+    data = await request.json()
+
+    update = Update.de_json(
+        data,
+        telegram_app.bot
+    )
+
+    await telegram_app.process_update(update)
+
+    return {
+        "status": "ok"
+    }
+
+
 @app.get("/")
 def root():
     return {
@@ -132,7 +240,10 @@ def receive_metrics(
             "message": "computer_id is required"
         }
 
-    if not check_pc_token(computer_id, authorization):
+    if not check_pc_token(
+        computer_id,
+        authorization
+    ):
         return {
             "status": "error",
             "message": "Unauthorized"
@@ -161,7 +272,10 @@ def create_pairing_code(
             "message": "computer_id is required"
         }
 
-    if not check_pc_token(computer_id, authorization):
+    if not check_pc_token(
+        computer_id,
+        authorization
+    ):
         return {
             "status": "error",
             "message": "Unauthorized"
