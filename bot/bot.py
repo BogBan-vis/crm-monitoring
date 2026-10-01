@@ -18,21 +18,14 @@ SERVER_URL = os.getenv(
 API_SECRET = os.getenv("API_SECRET")
 
 
-# =========================
-# GitHub
-# =========================
-
-GITHUB_WINDOWS_DOWNLOAD = (
+WINDOWS_AGENT_URL = (
     "https://github.com/BogBan-vis/crm-monitoring"
     "/releases/download/v1.1/CRM_Monitoring_Agent.exe"
 )
 
 
-# =========================
-# Server request
-# =========================
-
 def server_request(method, path, data=None, admin=False):
+
     url = SERVER_URL + path
 
     headers = {
@@ -55,6 +48,7 @@ def server_request(method, path, data=None, admin=False):
     )
 
     try:
+
         with urllib.request.urlopen(
             request,
             timeout=10
@@ -67,6 +61,7 @@ def server_request(method, path, data=None, admin=False):
     except urllib.error.HTTPError as error:
 
         try:
+
             body = error.read().decode("utf-8")
 
             return json.loads(body)
@@ -92,6 +87,7 @@ async def server_request_async(
     data=None,
     admin=False
 ):
+
     return await asyncio.to_thread(
         server_request,
         method,
@@ -100,10 +96,6 @@ async def server_request_async(
         admin
     )
 
-
-# =========================
-# Main menu
-# =========================
 
 def main_menu():
 
@@ -142,10 +134,6 @@ def main_menu():
     return InlineKeyboardMarkup(keyboard)
 
 
-# =========================
-# Download menu
-# =========================
-
 def downloads_menu():
 
     keyboard = [
@@ -176,10 +164,6 @@ def downloads_menu():
     return InlineKeyboardMarkup(keyboard)
 
 
-# =========================
-# Linux menu
-# =========================
-
 def linux_menu():
 
     keyboard = [
@@ -203,10 +187,6 @@ def linux_menu():
     return InlineKeyboardMarkup(keyboard)
 
 
-# =========================
-# /start
-# =========================
-
 async def start(update, context):
 
     context.user_data[
@@ -222,20 +202,12 @@ async def start(update, context):
     )
 
 
-# =========================
-# Buttons
-# =========================
-
 async def button(update, context):
 
     query = update.callback_query
 
     await query.answer()
 
-
-    # -------------------------
-    # Downloads
-    # -------------------------
 
     if query.data == "downloads":
 
@@ -250,10 +222,6 @@ async def button(update, context):
         return
 
 
-    # -------------------------
-    # Windows download
-    # -------------------------
-
     if query.data == "windows_download":
 
         keyboard = [
@@ -261,7 +229,7 @@ async def button(update, context):
             [
                 InlineKeyboardButton(
                     "⬇️ Скачать Windows Agent",
-                    url=GITHUB_WINDOWS_DOWNLOAD
+                    url=WINDOWS_AGENT_URL
                 )
             ],
 
@@ -287,10 +255,6 @@ async def button(update, context):
         return
 
 
-    # -------------------------
-    # Linux
-    # -------------------------
-
     if query.data == "linux_download":
 
         await query.message.reply_text(
@@ -303,10 +267,6 @@ async def button(update, context):
 
         return
 
-
-    # -------------------------
-    # Debian / Ubuntu
-    # -------------------------
 
     if query.data == "linux_deb":
 
@@ -322,10 +282,6 @@ async def button(update, context):
         return
 
 
-    # -------------------------
-    # Pair
-    # -------------------------
-
     if query.data == "pair":
 
         context.user_data[
@@ -335,20 +291,14 @@ async def button(update, context):
         await query.message.reply_text(
 
             "🔗 Привязка компьютера\n\n"
-
             "1. Запустите агент на компьютере.\n"
-            "2. Нажмите в агенте "
-            "«Получить код привязки».\n"
+            "2. Нажмите «Получить код привязки».\n"
             "3. Введите сюда полученные 6 цифр."
 
         )
 
         return
 
-
-    # -------------------------
-    # Status
-    # -------------------------
 
     if query.data == "status":
 
@@ -360,17 +310,13 @@ async def button(update, context):
         return
 
 
-    # -------------------------
-    # Information
-    # -------------------------
-
     if query.data == "info":
 
         await query.message.reply_text(
 
             "CRM Monitoring\n\n"
-
-            "Компьютер отправляет последнее состояние.\n"
+            "Компьютер отправляет только последнее "
+            "состояние.\n"
             "История мониторинга не хранится.",
 
             reply_markup=main_menu()
@@ -378,10 +324,6 @@ async def button(update, context):
 
         return
 
-
-    # -------------------------
-    # Back
-    # -------------------------
 
     if query.data == "back":
 
@@ -395,10 +337,6 @@ async def button(update, context):
         return
 
 
-# =========================
-# Pairing code
-# =========================
-
 async def pairing_code(update, context):
 
     if not context.user_data.get(
@@ -406,25 +344,19 @@ async def pairing_code(update, context):
     ):
         return
 
-
     code = update.message.text.strip()
-
 
     if len(code) != 6 or not code.isdigit():
 
         await update.message.reply_text(
-
             "Код должен состоять ровно из 6 цифр."
-
         )
 
         return
 
-
     telegram_id = str(
         update.effective_user.id
     )
-
 
     result = await server_request_async(
 
@@ -439,7 +371,6 @@ async def pairing_code(update, context):
 
     )
 
-
     if result.get("status") != "ok":
 
         await update.message.reply_text(
@@ -451,31 +382,23 @@ async def pairing_code(update, context):
 
         return
 
-
     context.user_data[
         "waiting_pairing_code"
     ] = False
-
 
     computer_id = result.get(
         "computer_id",
         "неизвестно"
     )
 
-
     await update.message.reply_text(
 
         "✅ Компьютер успешно привязан.\n\n"
-
-        f"Компьютер: {computer_id}",
+        f"ID компьютера: {computer_id}",
 
         reply_markup=main_menu()
     )
 
-
-# =========================
-# Computer status
-# =========================
 
 async def show_status(message, telegram_id):
 
@@ -487,7 +410,6 @@ async def show_status(message, telegram_id):
 
         admin=True
     )
-
 
     status = result.get("status")
 
@@ -519,15 +441,10 @@ async def show_status(message, telegram_id):
 
     if status != "ok":
 
-        error_message = result.get(
-            "message",
-            "неизвестная ошибка"
-        )
-
         await message.reply_text(
 
             "❌ Не удалось получить состояние компьютера.\n\n"
-            f"Ошибка: {error_message}",
+            f"Ошибка: {result.get('message', 'неизвестная ошибка')}",
 
             reply_markup=main_menu()
         )
@@ -540,12 +457,10 @@ async def show_status(message, telegram_id):
         "неизвестно"
     )
 
-
     latest = result.get(
         "data",
         {}
     )
-
 
     data = latest.get(
         "data",
@@ -553,8 +468,18 @@ async def show_status(message, telegram_id):
     )
 
 
+    hostname = data.get(
+        "hostname",
+        "—"
+    )
+
     cpu = data.get(
         "cpu_percent",
+        "—"
+    )
+
+    threads = data.get(
+        "cpu_threads",
         "—"
     )
 
@@ -563,14 +488,17 @@ async def show_status(message, telegram_id):
         "—"
     )
 
-    disk = data.get(
-        "disk_percent",
-        "—"
+    ram_used = data.get(
+        "ram_used_gb"
     )
 
-    hostname = data.get(
-        "hostname",
-        "—"
+    ram_total = data.get(
+        "ram_total_gb"
+    )
+
+    disks = data.get(
+        "disks",
+        []
     )
 
     received_at = latest.get(
@@ -580,18 +508,74 @@ async def show_status(message, telegram_id):
 
 
     text = (
-
         "💻 Мой компьютер\n\n"
-
         f"ID: {computer_id}\n"
-        f"Имя: {hostname}\n\n"
-
+        f"Имя Windows: {hostname}\n\n"
         f"CPU: {cpu}%\n"
-        f"RAM: {ram}%\n"
-        f"Диск: {disk}%\n\n"
+        f"Потоки CPU: {threads}\n"
+        f"RAM: {ram}%"
+    )
 
-        f"Последние данные: {received_at}"
 
+    if ram_used is not None and ram_total is not None:
+
+        text += (
+            f" ({ram_used} / {ram_total} GB)"
+        )
+
+
+    text += "\n\n💾 Диски:\n"
+
+
+    if disks:
+
+        for disk in disks:
+
+            device = disk.get(
+                "device",
+                "—"
+            )
+
+            mountpoint = disk.get(
+                "mountpoint",
+                "—"
+            )
+
+            total = disk.get(
+                "total_gb",
+                "—"
+            )
+
+            used = disk.get(
+                "used_gb",
+                "—"
+            )
+
+            free = disk.get(
+                "free_gb",
+                "—"
+            )
+
+            percent = disk.get(
+                "percent",
+                "—"
+            )
+
+            text += (
+                f"\n{device} {mountpoint}\n"
+                f"  Всего: {total} GB\n"
+                f"  Занято: {used} GB ({percent}%)\n"
+                f"  Свободно: {free} GB\n"
+            )
+
+    else:
+
+        text += "Нет данных о дисках.\n"
+
+
+    text += (
+        f"\n🕒 Последние данные:\n"
+        f"{received_at}"
     )
 
 
@@ -602,10 +586,6 @@ async def show_status(message, telegram_id):
         reply_markup=main_menu()
     )
 
-
-# =========================
-# Error handler
-# =========================
 
 async def error_handler(update, context):
 
