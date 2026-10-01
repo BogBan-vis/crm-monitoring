@@ -17,13 +17,14 @@ from telegram.ext import (
     filters,
 )
 
+
 SERVER_URL = os.getenv(
     "SERVER_URL",
     "http://127.0.0.1:8000"
 )
 
-# Пока используем компьютер, с которого агент уже отправляет данные.
-# Позже заменим это на выбор компьютера из списка.
+API_SECRET = os.getenv("API_SECRET")
+
 COMPUTER_ID = "DESKTOP-JMPKV7V"
 
 WINDOWS_AGENT_URL = (
@@ -33,20 +34,29 @@ WINDOWS_AGENT_URL = (
 
 
 def get_status():
+    if not API_SECRET:
+        return {
+            "status": "error",
+            "message": "API_SECRET не настроен на сервере."
+        }
+
     url = f"{SERVER_URL}/api/status/{COMPUTER_ID}"
 
-    try:
-        with urllib.request.urlopen(
-            url,
-            timeout=60
-        ) as response:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {API_SECRET}"
+        },
+        method="GET"
+    )
 
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
             return json.loads(
                 response.read().decode("utf-8")
             )
 
     except Exception as error:
-
         return {
             "status": "error",
             "message": str(error)
@@ -54,24 +64,19 @@ def get_status():
 
 
 def format_status(result):
-
     if result.get("status") == "not_found":
-
         return (
             f"❌ Данных от компьютера "
             f"{COMPUTER_ID} пока нет."
         )
 
     if result.get("status") == "error":
-
         return (
-            "❌ Не удалось получить данные "
-            "от сервера.\n\n"
+            "❌ Не удалось получить данные от сервера.\n\n"
             f"{result.get('message', 'Неизвестная ошибка')}"
         )
 
     data = result.get("data", {})
-
     received_at = result.get(
         "received_at",
         "неизвестно"
@@ -81,7 +86,9 @@ def format_status(result):
     ram = data.get("ram_percent")
     ram_used = data.get("ram_used_gb")
     ram_total = data.get("ram_total_gb")
-    connections = data.get("network_connections")
+    connections = data.get(
+        "network_connections"
+    )
 
     text = (
         "🖥 CRM Monitoring\n\n"
@@ -94,15 +101,10 @@ def format_status(result):
         "Диски:\n"
     )
 
-    disks = data.get(
-        "disks",
-        []
-    )
+    disks = data.get("disks", [])
 
     if disks:
-
         for disk in disks:
-
             text += (
                 f"{disk.get('mountpoint')} — "
                 f"{disk.get('used_gb')} / "
@@ -110,9 +112,7 @@ def format_status(result):
                 f"(свободно "
                 f"{disk.get('free_gb')} GB)\n"
             )
-
     else:
-
         text += "Нет данных\n"
 
     text += (
@@ -124,7 +124,6 @@ def format_status(result):
 
 
 def start_keyboard():
-
     return ReplyKeyboardMarkup(
         [["▶️ Запуск"]],
         resize_keyboard=True,
@@ -133,7 +132,6 @@ def start_keyboard():
 
 
 def main_menu():
-
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
@@ -151,7 +149,6 @@ def main_menu():
 
 
 def windows_menu():
-
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
@@ -175,7 +172,6 @@ def windows_menu():
 
 
 def linux_menu():
-
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton(
@@ -204,41 +200,26 @@ def linux_menu():
     ])
 
 
-async def start(
-    update,
-    context
-):
-
+async def start(update, context):
     await update.message.reply_text(
         "CRM Monitoring Bot",
         reply_markup=start_keyboard()
     )
 
 
-async def text_handler(
-    update,
-    context
-):
-
+async def text_handler(update, context):
     if update.message.text == "▶️ Запуск":
-
         await update.message.reply_text(
             "Выберите операционную систему:",
             reply_markup=main_menu()
         )
 
 
-async def button_handler(
-    update,
-    context
-):
-
+async def button_handler(update, context):
     query = update.callback_query
-
     await query.answer()
 
     if query.data == "os_windows":
-
         await query.edit_message_text(
             "🪟 Windows\n\n"
             "Выберите действие:",
@@ -246,7 +227,6 @@ async def button_handler(
         )
 
     elif query.data == "os_linux":
-
         await query.edit_message_text(
             "🐧 Linux\n\n"
             "Выберите дистрибутив:",
@@ -254,7 +234,6 @@ async def button_handler(
         )
 
     elif query.data == "status":
-
         await query.edit_message_text(
             "⏳ Подключение к серверу...\n"
             "Если сервер спит, это может занять "
@@ -269,14 +248,12 @@ async def button_handler(
         )
 
     elif query.data == "back_main":
-
         await query.edit_message_text(
             "Выберите операционную систему:",
             reply_markup=main_menu()
         )
 
     elif query.data == "linux_debian":
-
         await query.edit_message_text(
             "🐧 Debian\n\n"
             "Пакет .deb будет добавлен позже.",
@@ -291,11 +268,9 @@ async def button_handler(
         )
 
     elif query.data == "linux_astra":
-
         await query.edit_message_text(
             "🐧 Astra Linux\n\n"
-            "Пакет для Astra Linux будет "
-            "добавлен позже.",
+            "Пакет для Astra Linux будет добавлен позже.",
             reply_markup=InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton(
@@ -307,7 +282,6 @@ async def button_handler(
         )
 
     elif query.data == "linux_ubuntu":
-
         await query.edit_message_text(
             "🐧 Ubuntu\n\n"
             "Пакет .deb будет добавлен позже.",
@@ -322,28 +296,18 @@ async def button_handler(
         )
 
 
-async def ignore_other_messages(
-    update,
-    context
-):
-
+async def ignore_other_messages(update, context):
     return
 
 
 def main():
-
-    token = os.getenv(
-        "TELEGRAM_BOT_TOKEN"
-    )
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
 
     if not token:
-
         print(
             "Ошибка: переменная "
-            "TELEGRAM_BOT_TOKEN "
-            "не установлена."
+            "TELEGRAM_BOT_TOKEN не установлена."
         )
-
         return
 
     application = (
@@ -353,16 +317,11 @@ def main():
     )
 
     application.add_handler(
-        CommandHandler(
-            "start",
-            start
-        )
+        CommandHandler("start", start)
     )
 
     application.add_handler(
-        CallbackQueryHandler(
-            button_handler
-        )
+        CallbackQueryHandler(button_handler)
     )
 
     application.add_handler(
@@ -379,13 +338,10 @@ def main():
         )
     )
 
-    print(
-        "Telegram-бот запущен."
-    )
+    print("Telegram-бот запущен.")
 
     application.run_polling()
 
 
 if __name__ == "__main__":
-
     main()
