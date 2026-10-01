@@ -1,5 +1,7 @@
 import os
-import requests
+import json
+import urllib.request
+import urllib.error
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -11,19 +13,63 @@ from telegram.ext import (
     filters,
 )
 
+
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
 SERVER_URL = os.getenv(
     "SERVER_URL",
-    "https://crm-monitoring-8yfm.onrender.com",
+    "https://crm-monitoring-8yfm.onrender.com"
 ).rstrip("/")
+
 API_SECRET = os.getenv("API_SECRET")
 
 
-def server_headers():
-    return {
-        "Authorization": f"Bearer {API_SECRET}",
-        "Content-Type": "application/json",
+def server_request(method, path, data=None, admin=False):
+    url = SERVER_URL + path
+
+    headers = {
+        "Content-Type": "application/json"
     }
+
+    if admin:
+        headers["Authorization"] = f"Bearer {API_SECRET}"
+
+    body = None
+
+    if data is not None:
+        body = json.dumps(data).encode("utf-8")
+
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers=headers,
+        method=method
+    )
+
+    try:
+        with urllib.request.urlopen(
+            request,
+            timeout=10
+        ) as response:
+            return json.loads(
+                response.read().decode("utf-8")
+            )
+
+    except urllib.error.HTTPError as error:
+        try:
+            body = error.read().decode("utf-8")
+            return json.loads(body)
+        except Exception:
+            return {
+                "status": "error",
+                "message": f"HTTP {error.code}"
+            }
+
+    except Exception as error:
+        return {
+            "status": "error",
+            "message": str(error)
+        }
 
 
 def main_menu():
@@ -31,36 +77,45 @@ def main_menu():
         [
             InlineKeyboardButton(
                 "🔗 Привязать компьютер",
-                callback_data="pair",
+                callback_data="pair"
             )
         ],
         [
             InlineKeyboardButton(
                 "💻 Мой компьютер",
-                callback_data="status",
+                callback_data="status"
             )
         ],
         [
             InlineKeyboardButton(
                 "ℹ️ Информация",
-                callback_data="info",
+                callback_data="info"
             )
-        ],
+        ]
     ]
 
     return InlineKeyboardMarkup(keyboard)
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    context.user_data["waiting_pairing_code"] = False
+
     await update.message.reply_text(
         "🖥 CRM Monitoring\n\n"
         "Управление мониторингом компьютера.",
-        reply_markup=main_menu(),
+        reply_markup=main_menu()
     )
 
 
-async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def button(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
     query = update.callback_query
+
     await query.answer()
 
     if query.data == "pair":
@@ -70,26 +125,33 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Введите 6-значный код привязки, "
             "который показал агент на компьютере."
         )
+
         return
 
     if query.data == "status":
         await show_status(
             query.message,
-            query.from_user.id,
+            query.from_user.id
         )
+
         return
 
     if query.data == "info":
         await query.message.reply_text(
             "CRM Monitoring\n\n"
-            "Агент отправляет последнее состояние компьютера.\n"
+            "Компьютер отправляет последнее состояние.\n"
             "История мониторинга не хранится.",
-            reply_markup=main_menu(),
+            reply_markup=main_menu()
         )
 
 
-async def pairing_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.user_data.get("waiting_pairing_code"):
+async def pairing_code(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    if not context.user_data.get(
+        "waiting_pairing_code"
+    ):
         return
 
     code = update.message.text.strip()
@@ -100,101 +162,115 @@ async def pairing_code(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    telegram_id = str(update.effective_user.id)
+    telegram_id = str(
+        update.effective_user.id
+    )
 
-    try:
-        response = requests.post(
-            f"{SERVER_URL}/api/pairing/confirm",
-            json={
-                "telegram_id": telegram_id,
-                "code": code,
-            },
-            timeout=10,
-        )
-
-        result = response.json()
-
-    except Exception as error:
-        await update.message.reply_text(
-            f"Ошибка связи с сервером:\n{error}",
-            reply_markup=main_menu(),
-        )
-        return
+    result = server_request(
+        "POST",
+        "/api/pairing/confirm",
+        {
+            "telegram_id": telegram_id,
+            "code": code
+        }
+    )
 
     if result.get("status") != "ok":
         await update.message.reply_text(
             "❌ Код недействителен или уже использован.",
-            reply_markup=main_menu(),
+            reply_markup=main_menu()
         )
         return
 
-    context.user_data["waiting_pairing_code"] = False
+    context.user_data[
+        "waiting_pairing_code"
+    ] = False
 
     computer_id = result.get(
         "computer_id",
-        "неизвестно",
+        "неизвестно"
     )
 
     await update.message.reply_text(
         "✅ Компьютер успешно привязан.\n\n"
         f"Компьютер: {computer_id}",
-        reply_markup=main_menu(),
+        reply_markup=main_menu()
     )
 
 
-async def show_status(message, telegram_id):
-    try:
-        response = requests.get(
-            f"{SERVER_URL}/api/user/status/{telegram_id}",
-            headers=server_headers(),
-            timeout=10,
-        )
-
-        result = response.json()
-
-    except Exception as error:
-        await message.reply_text(
-            f"Ошибка связи с сервером:\n{error}",
-            reply_markup=main_menu(),
-        )
-        return
+async def show_status(
+    message,
+    telegram_id
+):
+    result = server_request(
+        "GET",
+        f"/api/user/status/{telegram_id}",
+        admin=True
+    )
 
     status = result.get("status")
 
     if status == "not_linked":
         await message.reply_text(
             "Компьютер ещё не привязан.",
-            reply_markup=main_menu(),
+            reply_markup=main_menu()
         )
         return
 
     if status == "not_found":
         await message.reply_text(
-            "Компьютер привязан, но данные от него ещё не получены.",
-            reply_markup=main_menu(),
+            "Компьютер привязан, "
+            "но данные от него ещё не получены.",
+            reply_markup=main_menu()
         )
         return
 
     if status != "ok":
         await message.reply_text(
             "Не удалось получить состояние компьютера.",
-            reply_markup=main_menu(),
+            reply_markup=main_menu()
         )
         return
 
     computer_id = result.get(
         "computer_id",
-        "неизвестно",
+        "неизвестно"
     )
 
-    latest = result.get("data", {})
-    data = latest.get("data", {})
+    latest = result.get(
+        "data",
+        {}
+    )
 
-    cpu = data.get("cpu_percent", "—")
-    ram = data.get("ram_percent", "—")
-    disk = data.get("disk_percent", "—")
-    hostname = data.get("hostname", "—")
-    received_at = latest.get("received_at", "—")
+    data = latest.get(
+        "data",
+        {}
+    )
+
+    cpu = data.get(
+        "cpu_percent",
+        "—"
+    )
+
+    ram = data.get(
+        "ram_percent",
+        "—"
+    )
+
+    disk = data.get(
+        "disk_percent",
+        "—"
+    )
+
+    hostname = data.get(
+        "hostname",
+        "—"
+    )
+
+    received_at = latest.get(
+        "received_at",
+        "—"
+    )
 
     text = (
         "💻 Мой компьютер\n\n"
@@ -208,14 +284,17 @@ async def show_status(message, telegram_id):
 
     await message.reply_text(
         text,
-        reply_markup=main_menu(),
+        reply_markup=main_menu()
     )
 
 
-async def error_handler(update, context):
+async def error_handler(
+    update,
+    context: ContextTypes.DEFAULT_TYPE
+):
     print(
         "Telegram error:",
-        context.error,
+        context.error
     )
 
 
@@ -239,20 +318,20 @@ def main():
     application.add_handler(
         CommandHandler(
             "start",
-            start,
+            start
         )
     )
 
     application.add_handler(
         CallbackQueryHandler(
-            button,
+            button
         )
     )
 
     application.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
-            pairing_code,
+            pairing_code
         )
     )
 
