@@ -613,5 +613,3 @@ async def error_handler(update, context):
         "Telegram error:",
         context.error
     )
-
-Этот `bot.py` **не возвращает polling** и не требует менять текущий `server.py`. Windows-кнопка теперь ведёт прямо на Release-файл агента.
