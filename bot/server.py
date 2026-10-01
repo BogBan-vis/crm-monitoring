@@ -41,8 +41,12 @@ def check_pc_token(computer_id: str, token: str | None):
         return False
 
     try:
-        raw = base64.urlsafe_b64decode(token.encode("utf-8")).decode("utf-8")
+        raw = base64.urlsafe_b64decode(
+            token.encode("utf-8")
+        ).decode("utf-8")
+
         token_computer_id, signature = raw.rsplit(":", 1)
+
     except Exception:
         return False
 
@@ -55,7 +59,10 @@ def check_pc_token(computer_id: str, token: str | None):
         hashlib.sha256
     ).hexdigest()
 
-    return hmac.compare_digest(signature, expected_signature)
+    return hmac.compare_digest(
+        signature,
+        expected_signature
+    )
 
 
 def check_admin(authorization):
@@ -112,7 +119,10 @@ def receive_metrics(
             "message": "computer_id is required"
         }
 
-    if not check_pc_token(computer_id, authorization):
+    if not check_pc_token(
+        computer_id,
+        authorization
+    ):
         return {
             "status": "error",
             "message": "Unauthorized"
