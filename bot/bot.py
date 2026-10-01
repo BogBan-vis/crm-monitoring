@@ -11,7 +11,6 @@ from telegram.ext import (
     filters,
 )
 
-
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 SERVER_URL = os.getenv(
     "SERVER_URL",
@@ -171,8 +170,7 @@ async def show_status(message, telegram_id):
 
     if status == "not_found":
         await message.reply_text(
-            "Компьютер привязан, "
-            "но данные от него ещё не получены.",
+            "Компьютер привязан, но данные от него ещё не получены.",
             reply_markup=main_menu(),
         )
         return
@@ -269,4 +267,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-```
