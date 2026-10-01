@@ -23,12 +23,7 @@ WINDOWS_AGENT_URL = (
 )
 
 
-def server_request(
-    method,
-    path,
-    data=None,
-    admin=False
-):
+def server_request(method, path, data=None, admin=False):
     url = f"{SERVER_URL}{path}"
 
     headers = {
@@ -36,16 +31,12 @@ def server_request(
     }
 
     if admin and API_SECRET:
-        headers["Authorization"] = (
-            f"Bearer {API_SECRET}"
-        )
+        headers["Authorization"] = f"Bearer {API_SECRET}"
 
     request_data = None
 
     if data is not None:
-        request_data = json.dumps(
-            data
-        ).encode("utf-8")
+        request_data = json.dumps(data).encode("utf-8")
 
     request = urllib.request.Request(
         url,
@@ -60,9 +51,7 @@ def server_request(
             timeout=15
         ) as response:
 
-            raw = response.read().decode(
-                "utf-8"
-            )
+            raw = response.read().decode("utf-8")
 
             if not raw:
                 return {}
@@ -72,10 +61,7 @@ def server_request(
     except urllib.error.HTTPError as error:
 
         try:
-            raw = error.read().decode(
-                "utf-8"
-            )
-
+            raw = error.read().decode("utf-8")
             return json.loads(raw)
 
         except Exception:
@@ -112,11 +98,11 @@ def main_menu():
     keyboard = [
         [
             InlineKeyboardButton(
-                "▶️ Запустить",
+                "▶️ Запустить агента",
                 callback_data="start_agent"
             ),
             InlineKeyboardButton(
-                "⏹ Остановить",
+                "⏹ Остановить агента",
                 callback_data="stop_agent"
             )
         ],
@@ -146,9 +132,7 @@ def main_menu():
         ]
     ]
 
-    return InlineKeyboardMarkup(
-        keyboard
-    )
+    return InlineKeyboardMarkup(keyboard)
 
 
 def downloads_menu():
@@ -174,9 +158,7 @@ def downloads_menu():
         ]
     ]
 
-    return InlineKeyboardMarkup(
-        keyboard
-    )
+    return InlineKeyboardMarkup(keyboard)
 
 
 def linux_menu():
@@ -208,17 +190,13 @@ def linux_menu():
         ]
     ]
 
-    return InlineKeyboardMarkup(
-        keyboard
-    )
+    return InlineKeyboardMarkup(keyboard)
 
 
-async def edit_message(
-    query,
-    text,
-    reply_markup=None
-):
+async def edit_message(query, text, reply_markup=None):
+
     try:
+
         await query.edit_message_text(
             text=text,
             reply_markup=reply_markup
@@ -226,9 +204,7 @@ async def edit_message(
 
     except Exception as error:
 
-        if "Message is not modified" not in str(
-            error
-        ):
+        if "Message is not modified" not in str(error):
             raise
 
 
@@ -236,6 +212,9 @@ async def start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
+
+    context.user_data["waiting_pairing_code"] = False
+
     text = (
         "🤖 CRM Monitoring\n\n"
         "Выберите действие:"
@@ -261,13 +240,17 @@ async def button(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
+
     query = update.callback_query
 
     await query.answer()
 
     data = query.data
 
+
     if data == "back_main":
+
+        context.user_data["waiting_pairing_code"] = False
 
         await edit_message(
             query,
@@ -365,11 +348,13 @@ async def button(
 
     if data == "pair":
 
+        context.user_data["waiting_pairing_code"] = True
+
         await edit_message(
             query,
             "🔗 Привязка компьютера\n\n"
-            "Введите 6-значный код, который "
-            "показывает агент на компьютере.",
+            "Введите 6-значный код, "
+            "который показывает агент.",
             InlineKeyboardMarkup([
                 [
                     InlineKeyboardButton(
@@ -379,10 +364,6 @@ async def button(
                 ]
             ])
         )
-
-        context.user_data[
-            "waiting_pairing_code"
-        ] = True
 
         return
 
@@ -462,6 +443,7 @@ async def pairing_code(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
+
     if not context.user_data.get(
         "waiting_pairing_code"
     ):
@@ -490,9 +472,7 @@ async def pairing_code(
         }
     )
 
-    context.user_data[
-        "waiting_pairing_code"
-    ] = False
+    context.user_data["waiting_pairing_code"] = False
 
     if result.get("status") != "ok":
 
@@ -525,6 +505,7 @@ async def show_status(
     query,
     context
 ):
+
     telegram_id = str(
         query.from_user.id
     )
@@ -670,20 +651,14 @@ async def show_status(
 
 
     if isinstance(cpu, (int, float)):
-
         cpu_text = f"{cpu:.1f}%"
-
     else:
-
         cpu_text = str(cpu)
 
 
     if isinstance(ram, (int, float)):
-
         ram_text = f"{ram:.1f}%"
-
     else:
-
         ram_text = str(ram)
 
 
@@ -790,6 +765,7 @@ async def error_handler(
     update: object,
     context: ContextTypes.DEFAULT_TYPE
 ):
+
     print(
         "Telegram error:",
         context.error
