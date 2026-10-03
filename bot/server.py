@@ -8,6 +8,7 @@ import asyncio
 import urllib.request
 import urllib.error
 from contextlib import asynccontextmanager
+from datetime import timedelta, timezone
 
 import psycopg
 from psycopg.rows import dict_row
@@ -880,8 +881,8 @@ async def show_status(message, telegram_id):
         "—"
     )
 
-    threads = data.get(
-        "cpu_threads",
+    network_connections = data.get(
+        "network_connections",
         "—"
     )
 
@@ -913,7 +914,7 @@ async def show_status(message, telegram_id):
         f"ID: {computer_id}\n"
         f"Имя Windows: {hostname}\n\n"
         f"CPU: {cpu}%\n"
-        f"Потоки CPU: {threads}\n"
+        f"Сетевые соединения: {network_connections}\n"
         f"RAM: {ram}%"
     )
 
@@ -970,9 +971,34 @@ async def show_status(message, telegram_id):
     else:
         text += "Нет данных о дисках.\n"
 
+    # PostgreSQL возвращает TIMESTAMPTZ с UTC.
+    # Переводим время в UTC+3.
+    if received_at != "—":
+        try:
+            received_dt = datetime.fromisoformat(
+                received_at.replace("Z", "+00:00")
+            )
+
+            utc_plus_3 = timezone(
+                timedelta(hours=3)
+            )
+
+            received_dt = received_dt.astimezone(
+                utc_plus_3
+            )
+
+            received_at_text = received_dt.strftime(
+                "%Y-%m-%d %H:%M:%S"
+            ) + " (UTC+3)"
+
+        except Exception:
+            received_at_text = str(received_at)
+    else:
+        received_at_text = "—"
+
     text += (
         "\n🕒 Последние данные:\n"
-        f"{received_at}"
+        f"{received_at_text}"
     )
 
     await message.reply_text(
