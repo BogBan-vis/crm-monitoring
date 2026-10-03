@@ -8,7 +8,7 @@ import asyncio
 import urllib.request
 import urllib.error
 from contextlib import asynccontextmanager
-from datetime import timedelta, timezone
+from datetime import datetime
 
 import psycopg
 from psycopg.rows import dict_row
@@ -971,25 +971,34 @@ async def show_status(message, telegram_id):
     else:
         text += "Нет данных о дисках.\n"
 
-    # PostgreSQL возвращает TIMESTAMPTZ с UTC.
-    # Переводим время в UTC+3.
+    # PostgreSQL возвращает TIMESTAMPTZ.
+    # Переводим его в локальный часовой пояс
+    # системы, на которой работает сервер.
     if received_at != "—":
         try:
             received_dt = datetime.fromisoformat(
-                received_at.replace("Z", "+00:00")
+                str(received_at).replace(
+                    "Z",
+                    "+00:00"
+                )
             )
 
-            utc_plus_3 = timezone(
-                timedelta(hours=3)
+            if received_dt.tzinfo is not None:
+                local_dt = received_dt.astimezone()
+            else:
+                local_dt = received_dt.astimezone()
+
+            local_timezone = (
+                local_dt.tzname()
+                or "LOCAL"
             )
 
-            received_dt = received_dt.astimezone(
-                utc_plus_3
+            received_at_text = (
+                local_dt.strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                )
+                + f" ({local_timezone})"
             )
-
-            received_at_text = received_dt.strftime(
-                "%Y-%m-%d %H:%M:%S"
-            ) + " (UTC+3)"
 
         except Exception:
             received_at_text = str(received_at)
