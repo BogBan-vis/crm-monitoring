@@ -7,7 +7,6 @@ import json
 import asyncio
 import urllib.request
 import urllib.error
-from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 
 import psycopg
@@ -144,7 +143,6 @@ def init_database():
 def db_register_computer(computer_id):
     with get_db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
                 INSERT INTO computers (
                     computer_id
@@ -157,15 +155,11 @@ def db_register_computer(computer_id):
         conn.commit()
 
 
-def db_create_registration(
-    code,
-    computer_id
-):
+def db_create_registration(code, computer_id):
     db_register_computer(computer_id)
 
     with get_db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
                 INSERT INTO registration_codes (
                     code,
@@ -183,7 +177,6 @@ def db_create_registration(
 def db_get_registration(code):
     with get_db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
                 SELECT
                     code,
@@ -200,14 +193,9 @@ def db_get_registration(code):
             return cur.fetchone()
 
 
-def db_confirm_registration(
-    code,
-    telegram_id,
-    token
-):
+def db_confirm_registration(code, telegram_id, token):
     with get_db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
                 UPDATE registration_codes
                 SET
@@ -233,7 +221,6 @@ def db_confirm_registration(
 def db_delete_registration(code):
     with get_db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
                 DELETE FROM registration_codes
                 WHERE code = %s
@@ -242,15 +229,11 @@ def db_delete_registration(code):
         conn.commit()
 
 
-def db_set_telegram_link(
-    telegram_id,
-    computer_id
-):
+def db_set_telegram_link(telegram_id, computer_id):
     db_register_computer(computer_id)
 
     with get_db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
                 INSERT INTO telegram_links (
                     telegram_id,
@@ -271,7 +254,6 @@ def db_set_telegram_link(
 def db_get_telegram_link(telegram_id):
     with get_db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
                 SELECT computer_id
                 FROM telegram_links
@@ -286,15 +268,11 @@ def db_get_telegram_link(telegram_id):
     return row["computer_id"]
 
 
-def db_create_pairing(
-    code,
-    computer_id
-):
+def db_create_pairing(code, computer_id):
     db_register_computer(computer_id)
 
     with get_db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
                 INSERT INTO pairing_codes (
                     code,
@@ -312,7 +290,6 @@ def db_create_pairing(
 def db_get_pairing(code):
     with get_db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
                 SELECT
                     code,
@@ -328,7 +305,6 @@ def db_get_pairing(code):
 def db_delete_pairing(code):
     with get_db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
                 DELETE FROM pairing_codes
                 WHERE code = %s
@@ -337,10 +313,7 @@ def db_delete_pairing(code):
         conn.commit()
 
 
-def db_save_metrics(
-    computer_id,
-    data
-):
+def db_save_metrics(computer_id, data):
     db_register_computer(computer_id)
 
     with get_db() as conn:
@@ -378,7 +351,6 @@ def db_save_metrics(
 def db_get_metrics(computer_id):
     with get_db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
                 SELECT
                     data,
@@ -409,10 +381,7 @@ def create_pc_token(computer_id: str):
     return base64.urlsafe_b64encode(raw).decode("utf-8")
 
 
-def check_pc_token(
-    computer_id: str,
-    token: str | None
-):
+def check_pc_token(computer_id: str, token: str | None):
     if not API_SECRET or not token:
         return False
 
@@ -424,10 +393,7 @@ def check_pc_token(
             token.encode("utf-8")
         ).decode("utf-8")
 
-        token_computer_id, signature = raw.rsplit(
-            ":",
-            1
-        )
+        token_computer_id, signature = raw.rsplit(":", 1)
 
     except Exception:
         return False
@@ -465,7 +431,6 @@ def check_admin(authorization):
 # =========================================================
 
 def telegram_api_request(method, data=None):
-
     if not BOT_TOKEN:
         return {
             "ok": False,
@@ -494,7 +459,6 @@ def telegram_api_request(method, data=None):
     )
 
     try:
-
         with urllib.request.urlopen(
             request,
             timeout=15
@@ -505,7 +469,6 @@ def telegram_api_request(method, data=None):
             )
 
     except Exception as error:
-
         return {
             "ok": False,
             "description": str(error),
@@ -517,90 +480,75 @@ def telegram_api_request(method, data=None):
 # =========================================================
 
 def main_menu():
-
     keyboard = [
-
         [
             InlineKeyboardButton(
                 "📥 Скачать агент",
                 callback_data="downloads"
             )
         ],
-
         [
             InlineKeyboardButton(
                 "🔗 Привязать компьютер",
                 callback_data="pair"
             )
         ],
-
         [
             InlineKeyboardButton(
                 "💻 Мой компьютер",
                 callback_data="status"
             )
         ],
-
         [
             InlineKeyboardButton(
                 "ℹ️ Информация",
                 callback_data="info"
             )
         ]
-
     ]
 
     return InlineKeyboardMarkup(keyboard)
 
 
 def downloads_menu():
-
     keyboard = [
-
         [
             InlineKeyboardButton(
                 "🪟 Windows",
                 callback_data="windows_download"
             )
         ],
-
         [
             InlineKeyboardButton(
                 "🐧 Linux",
                 callback_data="linux_download"
             )
         ],
-
         [
             InlineKeyboardButton(
                 "◀️ Назад",
                 callback_data="back"
             )
         ]
-
     ]
 
     return InlineKeyboardMarkup(keyboard)
 
 
 def linux_menu():
-
     keyboard = [
-
         [
             InlineKeyboardButton(
                 "📦 Debian / Ubuntu",
                 callback_data="linux_deb"
             )
         ],
-
         [
             InlineKeyboardButton(
                 "◀️ Назад",
                 callback_data="downloads"
             )
         ]
-
     ]
 
     return InlineKeyboardMarkup(keyboard)
@@ -611,16 +559,11 @@ def linux_menu():
 # =========================================================
 
 async def start(update, context):
-
-    context.user_data[
-        "waiting_pairing_code"
-    ] = False
+    context.user_data["waiting_pairing_code"] = False
 
     await update.message.reply_text(
-
         "🖥 CRM Monitoring\n\n"
         "Управление мониторингом компьютера.",
-
         reply_markup=main_menu()
     )
 
@@ -630,130 +573,118 @@ async def start(update, context):
 # =========================================================
 
 async def button(update, context):
-
     query = update.callback_query
 
     await query.answer()
 
     if query.data == "downloads":
-
         await query.message.reply_text(
-
             "📥 Скачать агент\n\n"
             "Выберите операционную систему.",
-
             reply_markup=downloads_menu()
         )
-
         return
 
     if query.data == "windows_download":
-
         keyboard = [
-
             [
                 InlineKeyboardButton(
                     "⬇️ Скачать Windows Agent",
                     url=WINDOWS_AGENT_URL
                 )
             ],
-
             [
                 InlineKeyboardButton(
                     "◀️ Назад",
                     callback_data="downloads"
                 )
             ]
-
         ]
 
         await query.message.reply_text(
-
             "🪟 Windows\n\n"
             "Нажмите кнопку ниже для загрузки агента.",
-
-            reply_markup=InlineKeyboardMarkup(
-                keyboard
-            )
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
-
         return
 
     if query.data == "linux_download":
-
         await query.message.reply_text(
-
             "🐧 Linux\n\n"
             "Выберите вариант.",
-
             reply_markup=linux_menu()
         )
-
         return
 
     if query.data == "linux_deb":
-
         await query.message.reply_text(
-
             "🐧 Linux\n\n"
             "Пакет агента для Debian / Ubuntu "
             "пока не опубликован.",
-
             reply_markup=linux_menu()
         )
-
         return
 
     if query.data == "pair":
+
+        telegram_id = str(query.from_user.id)
+
+        existing_computer_id = db_get_telegram_link(
+            telegram_id
+        )
+
+        if existing_computer_id:
+
+            context.user_data[
+                "waiting_pairing_code"
+            ] = False
+
+            await query.message.reply_text(
+                "✅ Компьютер уже привязан.\n\n"
+                f"Компьютер: {existing_computer_id}\n\n"
+                "Чтобы посмотреть состояние, "
+                "нажмите «💻 Мой компьютер».",
+                reply_markup=main_menu()
+            )
+
+            return
 
         context.user_data[
             "waiting_pairing_code"
         ] = True
 
         await query.message.reply_text(
-
             "🔗 Привязка компьютера\n\n"
             "1. Запустите агент на компьютере.\n"
             "2. Агент автоматически покажет "
             "6-значный код регистрации.\n"
             "3. Введите этот код сюда."
-
         )
 
         return
 
     if query.data == "status":
-
         await show_status(
             query.message,
             query.from_user.id
         )
-
         return
 
     if query.data == "info":
-
         await query.message.reply_text(
-
             "CRM Monitoring\n\n"
             "Компьютер отправляет только последнее "
             "состояние.\n"
             "История мониторинга не хранится.",
-
             reply_markup=main_menu()
         )
-
         return
 
     if query.data == "back":
-
         await query.message.reply_text(
-
             "🖥 CRM Monitoring",
-
             reply_markup=main_menu()
         )
-
         return
 
 
@@ -767,7 +698,6 @@ def server_request(
     data=None,
     admin=False
 ):
-
     url = SERVER_URL + path
 
     headers = {
@@ -775,18 +705,12 @@ def server_request(
     }
 
     if admin:
-
-        headers[
-            "Authorization"
-        ] = f"Bearer {API_SECRET}"
+        headers["Authorization"] = f"Bearer {API_SECRET}"
 
     body = None
 
     if data is not None:
-
-        body = json.dumps(
-            data
-        ).encode("utf-8")
+        body = json.dumps(data).encode("utf-8")
 
     request = urllib.request.Request(
         url,
@@ -796,7 +720,6 @@ def server_request(
     )
 
     try:
-
         with urllib.request.urlopen(
             request,
             timeout=10
@@ -807,24 +730,16 @@ def server_request(
             )
 
     except urllib.error.HTTPError as error:
-
         try:
-
-            body = error.read().decode(
-                "utf-8"
-            )
-
+            body = error.read().decode("utf-8")
             return json.loads(body)
-
         except Exception:
-
             return {
                 "status": "error",
                 "message": f"HTTP {error.code}"
             }
 
     except Exception as error:
-
         return {
             "status": "error",
             "message": str(error)
@@ -837,11 +752,8 @@ async def server_request_async(
     data=None,
     admin=False
 ):
-
     return await asyncio.to_thread(
-
         server_request,
-
         method,
         path,
         data,
@@ -854,7 +766,6 @@ async def server_request_async(
 # =========================================================
 
 async def registration_code(update, context):
-
     if not context.user_data.get(
         "waiting_pairing_code"
     ):
@@ -863,11 +774,9 @@ async def registration_code(update, context):
     code = update.message.text.strip()
 
     if len(code) != 6 or not code.isdigit():
-
         await update.message.reply_text(
             "Код должен состоять ровно из 6 цифр."
         )
-
         return
 
     telegram_id = str(
@@ -875,28 +784,20 @@ async def registration_code(update, context):
     )
 
     result = await server_request_async(
-
         "POST",
-
         "/api/register/confirm",
-
         {
             "telegram_id": telegram_id,
             "code": code
         }
-
     )
 
     if result.get("status") != "ok":
-
         await update.message.reply_text(
-
             "❌ Код недействителен, "
             "истёк или уже использован.",
-
             reply_markup=main_menu()
         )
-
         return
 
     context.user_data[
@@ -909,12 +810,10 @@ async def registration_code(update, context):
     )
 
     await update.message.reply_text(
-
         "✅ Регистрация компьютера подтверждена.\n\n"
         "Агент теперь автоматически получит "
         "токен доступа.\n\n"
         f"Компьютер: {computer_id}",
-
         reply_markup=main_menu()
     )
 
@@ -923,58 +822,37 @@ async def registration_code(update, context):
 # СТАТУС КОМПЬЮТЕРА
 # =========================================================
 
-async def show_status(
-    message,
-    telegram_id
-):
-
+async def show_status(message, telegram_id):
     result = await server_request_async(
-
         "GET",
-
         f"/api/user/status/{telegram_id}",
-
         admin=True
     )
 
-    status = result.get(
-        "status"
-    )
+    status = result.get("status")
 
     if status == "not_linked":
-
         await message.reply_text(
-
             "Компьютер ещё не привязан.",
-
             reply_markup=main_menu()
         )
-
         return
 
     if status == "not_found":
-
         await message.reply_text(
-
             "Компьютер привязан, "
             "но данные от него ещё не получены.",
-
             reply_markup=main_menu()
         )
-
         return
 
     if status != "ok":
-
         await message.reply_text(
-
             "❌ Не удалось получить "
             "состояние компьютера.\n\n"
             f"Ошибка: {result.get('message', 'неизвестная ошибка')}",
-
             reply_markup=main_menu()
         )
-
         return
 
     computer_id = result.get(
@@ -1031,12 +909,9 @@ async def show_status(
     )
 
     text = (
-
         "💻 Мой компьютер\n\n"
-
         f"ID: {computer_id}\n"
         f"Имя Windows: {hostname}\n\n"
-
         f"CPU: {cpu}%\n"
         f"Потоки CPU: {threads}\n"
         f"RAM: {ram}%"
@@ -1046,7 +921,6 @@ async def show_status(
         ram_used is not None
         and ram_total is not None
     ):
-
         text += (
             f" ({ram_used} / {ram_total} GB)"
         )
@@ -1054,7 +928,6 @@ async def show_status(
     text += "\n\n💾 Диски:\n"
 
     if disks:
-
         for disk in disks:
 
             device = disk.get(
@@ -1088,30 +961,22 @@ async def show_status(
             )
 
             text += (
-
                 f"\n{device} {mountpoint}\n"
-
                 f"  Всего: {total} GB\n"
                 f"  Занято: {used} GB ({percent}%)\n"
                 f"  Свободно: {free} GB\n"
             )
 
     else:
-
-        text += (
-            "Нет данных о дисках.\n"
-        )
+        text += "Нет данных о дисках.\n"
 
     text += (
-
         "\n🕒 Последние данные:\n"
         f"{received_at}"
     )
 
     await message.reply_text(
-
         text,
-
         reply_markup=main_menu()
     )
 
@@ -1120,11 +985,7 @@ async def show_status(
 # TELEGRAM ОШИБКИ
 # =========================================================
 
-async def error_handler(
-    update,
-    context
-):
-
+async def error_handler(update, context):
     print(
         "Telegram error:",
         context.error
@@ -1136,7 +997,6 @@ async def error_handler(
 # =========================================================
 
 def create_telegram_application():
-
     if not BOT_TOKEN:
         return None
 
@@ -1161,8 +1021,7 @@ def create_telegram_application():
 
     application.add_handler(
         MessageHandler(
-            filters.TEXT
-            & ~filters.COMMAND,
+            filters.TEXT & ~filters.COMMAND,
             registration_code
         )
     )
@@ -1180,7 +1039,6 @@ def create_telegram_application():
 
 @asynccontextmanager
 async def lifespan(app):
-
     global telegram_app
 
     print("Starting CRM Monitoring Server")
@@ -1197,9 +1055,7 @@ async def lifespan(app):
     telegram_app = create_telegram_application()
 
     if telegram_app:
-
         await telegram_app.initialize()
-
         await telegram_app.start()
 
         webhook_url = (
@@ -1221,7 +1077,6 @@ async def lifespan(app):
         )
 
     else:
-
         print(
             "TELEGRAM_BOT_TOKEN is not configured"
         )
@@ -1229,9 +1084,7 @@ async def lifespan(app):
     yield
 
     if telegram_app:
-
         await telegram_app.stop()
-
         await telegram_app.shutdown()
 
 
@@ -1251,15 +1104,9 @@ app = FastAPI(
 
 @app.get("/")
 def root():
-
     return {
-
         "status": "online",
-
-        "service": (
-            "CRM Monitoring Server"
-        )
-
+        "service": "CRM Monitoring Server"
     }
 
 
@@ -1271,9 +1118,7 @@ def root():
 async def telegram_webhook(
     request: Request
 ):
-
     if not telegram_app:
-
         return {
             "status": "error",
             "message": (
@@ -1282,7 +1127,6 @@ async def telegram_webhook(
         }
 
     try:
-
         body = await request.json()
 
         update = Update.de_json(
@@ -1299,7 +1143,6 @@ async def telegram_webhook(
         }
 
     except Exception as error:
-
         print(
             "Telegram webhook error:",
             error
@@ -1317,7 +1160,6 @@ async def telegram_webhook(
 
 @app.post("/api/register/start")
 def register_start(data: dict):
-
     computer_id = str(
         data.get(
             "computer_id",
@@ -1326,20 +1168,13 @@ def register_start(data: dict):
     ).strip()
 
     if not computer_id:
-
         return {
-
             "status": "error",
-
-            "message": (
-                "computer_id is required"
-            )
-
+            "message": "computer_id is required"
         }
 
     code = str(
-        secrets.randbelow(900000)
-        + 100000
+        secrets.randbelow(900000) + 100000
     )
 
     db_create_registration(
@@ -1348,13 +1183,9 @@ def register_start(data: dict):
     )
 
     return {
-
         "status": "ok",
-
         "computer_id": computer_id,
-
         "code": code,
-
     }
 
 
@@ -1364,7 +1195,6 @@ def register_start(data: dict):
 
 @app.post("/api/register/confirm")
 def register_confirm(data: dict):
-
     telegram_id = str(
         data.get(
             "telegram_id",
@@ -1380,62 +1210,40 @@ def register_confirm(data: dict):
     ).strip()
 
     if not telegram_id:
-
         return {
-
             "status": "error",
-
-            "message": (
-                "telegram_id is required"
-            )
-
+            "message": "telegram_id is required"
         }
 
     if not code:
-
         return {
-
             "status": "error",
-
-            "message": (
-                "code is required"
-            )
-
+            "message": "code is required"
         }
 
     registration = db_get_registration(code)
 
     if not registration:
-
         return {
-
             "status": "error",
-
             "message": (
                 "Invalid or expired "
                 "registration code"
             )
-
         }
 
-    computer_id = registration[
-        "computer_id"
-    ]
+    computer_id = registration["computer_id"]
 
     token = create_pc_token(
         computer_id
     )
 
     if not token:
-
         return {
-
             "status": "error",
-
             "message": (
                 "API_SECRET is not configured"
             )
-
         }
 
     db_set_telegram_link(
@@ -1450,15 +1258,9 @@ def register_confirm(data: dict):
     )
 
     return {
-
         "status": "ok",
-
-        "telegram_id":
-            telegram_id,
-
-        "computer_id":
-            computer_id,
-
+        "telegram_id": telegram_id,
+        "computer_id": computer_id,
     }
 
 
@@ -1468,7 +1270,6 @@ def register_confirm(data: dict):
 
 @app.post("/api/register/token")
 def register_token(data: dict):
-
     computer_id = str(
         data.get(
             "computer_id",
@@ -1484,98 +1285,61 @@ def register_token(data: dict):
     ).strip()
 
     if not computer_id:
-
         return {
-
             "status": "error",
-
-            "message": (
-                "computer_id is required"
-            )
-
+            "message": "computer_id is required"
         }
 
     if not code:
-
         return {
-
             "status": "error",
-
-            "message": (
-                "code is required"
-            )
-
+            "message": "code is required"
         }
 
     registration = db_get_registration(code)
 
     if not registration:
-
         return {
-
             "status": "error",
-
             "message": (
                 "Invalid or expired "
                 "registration code"
             )
-
         }
 
-    if (
-        registration["computer_id"]
-        != computer_id
-    ):
-
+    if registration["computer_id"] != computer_id:
         return {
-
             "status": "error",
-
             "message": (
                 "Computer ID does not match"
             )
-
         }
 
     if not registration["confirmed"]:
-
         return {
-
             "status": "error",
-
             "message": (
                 "Registration is not confirmed"
             )
-
         }
 
     token = registration["token"]
 
     if not token:
-
         return {
-
             "status": "error",
-
             "message": (
                 "Registration token "
                 "is not available"
             )
-
         }
 
     db_delete_registration(code)
 
     return {
-
         "status": "ok",
-
-        "computer_id":
-            computer_id,
-
-        "token":
-            token,
-
+        "computer_id": computer_id,
+        "token": token,
     }
 
 
@@ -1585,26 +1349,17 @@ def register_token(data: dict):
 
 @app.post("/api/admin/provision")
 def provision_pc(
-
     data: dict,
-
-    authorization:
-        str | None = Header(
-            default=None
-        ),
-
+    authorization: str | None = Header(
+        default=None
+    ),
 ):
-
     if not check_admin(
         authorization
     ):
-
         return {
-
             "status": "error",
-
             "message": "Unauthorized",
-
         }
 
     computer_id = data.get(
@@ -1612,14 +1367,9 @@ def provision_pc(
     )
 
     if not computer_id:
-
         return {
-
             "status": "error",
-
-            "message":
-                "computer_id is required",
-
+            "message": "computer_id is required",
         }
 
     token = create_pc_token(
@@ -1627,14 +1377,9 @@ def provision_pc(
     )
 
     if not token:
-
         return {
-
             "status": "error",
-
-            "message":
-                "API_SECRET is not configured",
-
+            "message": "API_SECRET is not configured",
         }
 
     db_register_computer(
@@ -1642,15 +1387,9 @@ def provision_pc(
     )
 
     return {
-
         "status": "ok",
-
-        "computer_id":
-            computer_id,
-
-        "token":
-            token,
-
+        "computer_id": computer_id,
+        "token": token,
     }
 
 
@@ -1660,43 +1399,28 @@ def provision_pc(
 
 @app.post("/api/metrics")
 def receive_metrics(
-
     data: dict,
-
-    authorization:
-        str | None = Header(
-            default=None
-        ),
-
+    authorization: str | None = Header(
+        default=None
+    ),
 ):
-
     computer_id = data.get(
         "computer_id"
     )
 
     if not computer_id:
-
         return {
-
             "status": "error",
-
-            "message":
-                "computer_id is required",
-
+            "message": "computer_id is required",
         }
 
     if not check_pc_token(
         computer_id,
         authorization
     ):
-
         return {
-
             "status": "error",
-
-            "message":
-                "Unauthorized",
-
+            "message": "Unauthorized",
         }
 
     db_save_metrics(
@@ -1705,9 +1429,7 @@ def receive_metrics(
     )
 
     return {
-
         "status": "ok",
-
     }
 
 
@@ -1717,48 +1439,32 @@ def receive_metrics(
 
 @app.post("/api/pairing/create")
 def create_pairing_code(
-
     data: dict,
-
-    authorization:
-        str | None = Header(
-            default=None
-        ),
-
+    authorization: str | None = Header(
+        default=None
+    ),
 ):
-
     computer_id = data.get(
         "computer_id"
     )
 
     if not computer_id:
-
         return {
-
             "status": "error",
-
-            "message":
-                "computer_id is required",
-
+            "message": "computer_id is required",
         }
 
     if not check_pc_token(
         computer_id,
         authorization
     ):
-
         return {
-
             "status": "error",
-
-            "message":
-                "Unauthorized",
-
+            "message": "Unauthorized",
         }
 
     code = str(
-        secrets.randbelow(900000)
-        + 100000
+        secrets.randbelow(900000) + 100000
     )
 
     db_create_pairing(
@@ -1767,15 +1473,9 @@ def create_pairing_code(
     )
 
     return {
-
         "status": "ok",
-
-        "computer_id":
-            computer_id,
-
-        "code":
-            code,
-
+        "computer_id": computer_id,
+        "code": code,
     }
 
 
@@ -1783,7 +1483,6 @@ def create_pairing_code(
 def confirm_pairing(
     data: dict
 ):
-
     telegram_id = str(
         data.get(
             "telegram_id",
@@ -1799,38 +1498,23 @@ def confirm_pairing(
     )
 
     if not telegram_id:
-
         return {
-
             "status": "error",
-
-            "message":
-                "telegram_id is required",
-
+            "message": "telegram_id is required",
         }
 
     if not code:
-
         return {
-
             "status": "error",
-
-            "message":
-                "code is required",
-
+            "message": "code is required",
         }
 
     pairing = db_get_pairing(code)
 
     if not pairing:
-
         return {
-
             "status": "error",
-
-            "message":
-                "Invalid or expired code",
-
+            "message": "Invalid or expired code",
         }
 
     computer_id = pairing[
@@ -1845,15 +1529,9 @@ def confirm_pairing(
     db_delete_pairing(code)
 
     return {
-
         "status": "ok",
-
-        "telegram_id":
-            telegram_id,
-
-        "computer_id":
-            computer_id,
-
+        "telegram_id": telegram_id,
+        "computer_id": computer_id,
     }
 
 
@@ -1863,27 +1541,17 @@ def confirm_pairing(
 
 @app.get("/api/status/{computer_id}")
 def get_status(
-
     computer_id: str,
-
-    authorization:
-        str | None = Header(
-            default=None
-        ),
-
+    authorization: str | None = Header(
+        default=None
+    ),
 ):
-
     if not check_admin(
         authorization
     ):
-
         return {
-
             "status": "error",
-
-            "message":
-                "Unauthorized",
-
+            "message": "Unauthorized",
         }
 
     latest = db_get_metrics(
@@ -1891,22 +1559,13 @@ def get_status(
     )
 
     if not latest:
-
         return {
-
-            "status":
-                "not_found",
-
+            "status": "not_found",
         }
 
     return {
-
-        "data":
-            latest["data"],
-
-        "received_at":
-            latest["received_at"].isoformat(),
-
+        "data": latest["data"],
+        "received_at": latest["received_at"].isoformat(),
     }
 
 
@@ -1916,27 +1575,17 @@ def get_status(
 
 @app.get("/api/user/status/{telegram_id}")
 def get_user_status(
-
     telegram_id: str,
-
-    authorization:
-        str | None = Header(
-            default=None
-        ),
-
+    authorization: str | None = Header(
+        default=None
+    ),
 ):
-
     if not check_admin(
         authorization
     ):
-
         return {
-
             "status": "error",
-
-            "message":
-                "Unauthorized",
-
+            "message": "Unauthorized",
         }
 
     computer_id = db_get_telegram_link(
@@ -1944,12 +1593,8 @@ def get_user_status(
     )
 
     if not computer_id:
-
         return {
-
-            "status":
-                "not_linked",
-
+            "status": "not_linked",
         }
 
     latest = db_get_metrics(
@@ -1957,33 +1602,16 @@ def get_user_status(
     )
 
     if not latest:
-
         return {
-
-            "status":
-                "not_found",
-
-            "computer_id":
-                computer_id,
-
+            "status": "not_found",
+            "computer_id": computer_id,
         }
 
     return {
-
-        "status":
-            "ok",
-
-        "computer_id":
-            computer_id,
-
+        "status": "ok",
+        "computer_id": computer_id,
         "data": {
-
-            "data":
-                latest["data"],
-
-            "received_at":
-                latest["received_at"].isoformat(),
-
+            "data": latest["data"],
+            "received_at": latest["received_at"].isoformat(),
         },
-
     }
