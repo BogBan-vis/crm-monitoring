@@ -3,15 +3,47 @@ import base64
 import hashlib
 import hmac
 import secrets
+import json
+import asyncio
+import urllib.request
+import urllib.error
 from datetime import datetime
+from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Header
+from fastapi import FastAPI, Header, Request
+
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
+
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 
 
-app = FastAPI(title="CRM Monitoring Server")
-
+# =========================================================
+# НАСТРОЙКИ
+# =========================================================
 
 API_SECRET = os.getenv("API_SECRET")
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+SERVER_URL = os.getenv(
+    "SERVER_URL",
+    "https://crm-monitoring-8yfm.onrender.com"
+).rstrip("/")
+
+WINDOWS_AGENT_URL = (
+    "https://github.com/BogBan-vis/crm-monitoring"
+    "/releases/download/v1.1/CRM_Monitoring_Agent.exe"
+)
 
 
 # =========================================================
@@ -24,11 +56,19 @@ latest_data = {}
 # telegram_id -> computer_id
 telegram_links = {}
 
-# code -> pairing information
+# Старые коды привязки.
 pairing_codes = {}
 
+# Новая первичная регистрация:
 # code -> registration information
 registration_codes = {}
+
+
+# =========================================================
+# TELEGRAM APPLICATION
+# =========================================================
+
+telegram_app = None
 
 
 # =========================================================
@@ -102,15 +142,909 @@ def check_admin(authorization):
 
 
 # =========================================================
+# TELEGRAM API
+# =========================================================
+
+def telegram_api_request(method, data=None):
+
+    if not BOT_TOKEN:
+        return {
+            "ok": False,
+            "description": "TELEGRAM_BOT_TOKEN is not configured",
+        }
+
+    url = (
+        f"https://api.telegram.org/bot"
+        f"{BOT_TOKEN}/{method}"
+    )
+
+    body = None
+
+    headers = {
+        "Content-Type": "application/json"
+    }
+
+    if data is not None:
+        body = json.dumps(data).encode("utf-8")
+
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers=headers,
+        method="POST"
+    )
+
+    try:
+
+        with urllib.request.urlopen(
+            request,
+            timeout=15
+        ) as response:
+
+            return json.loads(
+                response.read().decode("utf-8")
+            )
+
+    except Exception as error:
+
+        return {
+            "ok": False,
+            "description": str(error),
+        }
+
+
+# =========================================================
+# TELEGRAM МЕНЮ
+# =========================================================
+
+def main_menu():
+
+    keyboard = [
+
+        [
+            InlineKeyboardButton(
+                "📥 Скачать агент",
+                callback_data="downloads"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "🔗 Привязать компьютер",
+                callback_data="pair"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "💻 Мой компьютер",
+                callback_data="status"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "ℹ️ Информация",
+                callback_data="info"
+            )
+        ]
+
+    ]
+
+    return InlineKeyboardMarkup(keyboard)
+
+
+def downloads_menu():
+
+    keyboard = [
+
+        [
+            InlineKeyboardButton(
+                "🪟 Windows",
+                callback_data="windows_download"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "🐧 Linux",
+                callback_data="linux_download"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "◀️ Назад",
+                callback_data="back"
+            )
+        ]
+
+    ]
+
+    return InlineKeyboardMarkup(keyboard)
+
+
+def linux_menu():
+
+    keyboard = [
+
+        [
+            InlineKeyboardButton(
+                "📦 Debian / Ubuntu",
+                callback_data="linux_deb"
+            )
+        ],
+
+        [
+            InlineKeyboardButton(
+                "◀️ Назад",
+                callback_data="downloads"
+            )
+        ]
+
+    ]
+
+    return InlineKeyboardMarkup(keyboard)
+
+
+# =========================================================
+# TELEGRAM /start
+# =========================================================
+
+async def start(update, context):
+
+    context.user_data[
+        "waiting_pairing_code"
+    ] = False
+
+    await update.message.reply_text(
+
+        "🖥 CRM Monitoring\n\n"
+        "Управление мониторингом компьютера.",
+
+        reply_markup=main_menu()
+    )
+
+
+# =========================================================
+# TELEGRAM КНОПКИ
+# =========================================================
+
+async def button(update, context):
+
+    query = update.callback_query
+
+    await query.answer()
+
+
+    # -----------------------------------------------------
+    # Скачать агент
+    # -----------------------------------------------------
+
+    if query.data == "downloads":
+
+        await query.message.reply_text(
+
+            "📥 Скачать агент\n\n"
+            "Выберите операционную систему.",
+
+            reply_markup=downloads_menu()
+        )
+
+        return
+
+
+    # -----------------------------------------------------
+    # Windows
+    # -----------------------------------------------------
+
+    if query.data == "windows_download":
+
+        keyboard = [
+
+            [
+                InlineKeyboardButton(
+                    "⬇️ Скачать Windows Agent",
+                    url=WINDOWS_AGENT_URL
+                )
+            ],
+
+            [
+                InlineKeyboardButton(
+                    "◀️ Назад",
+                    callback_data="downloads"
+                )
+            ]
+
+        ]
+
+        await query.message.reply_text(
+
+            "🪟 Windows\n\n"
+            "Нажмите кнопку ниже для загрузки агента.",
+
+            reply_markup=InlineKeyboardMarkup(
+                keyboard
+            )
+        )
+
+        return
+
+
+    # -----------------------------------------------------
+    # Linux
+    # -----------------------------------------------------
+
+    if query.data == "linux_download":
+
+        await query.message.reply_text(
+
+            "🐧 Linux\n\n"
+            "Выберите вариант.",
+
+            reply_markup=linux_menu()
+        )
+
+        return
+
+
+    if query.data == "linux_deb":
+
+        await query.message.reply_text(
+
+            "🐧 Linux\n\n"
+            "Пакет агента для Debian / Ubuntu "
+            "пока не опубликован.",
+
+            reply_markup=linux_menu()
+        )
+
+        return
+
+
+    # -----------------------------------------------------
+    # Привязка
+    # -----------------------------------------------------
+
+    if query.data == "pair":
+
+        context.user_data[
+            "waiting_pairing_code"
+        ] = True
+
+        await query.message.reply_text(
+
+            "🔗 Привязка компьютера\n\n"
+            "1. Запустите агент на компьютере.\n"
+            "2. Агент автоматически покажет "
+            "6-значный код регистрации.\n"
+            "3. Введите этот код сюда."
+
+        )
+
+        return
+
+
+    # -----------------------------------------------------
+    # Статус
+    # -----------------------------------------------------
+
+    if query.data == "status":
+
+        await show_status(
+            query.message,
+            query.from_user.id
+        )
+
+        return
+
+
+    # -----------------------------------------------------
+    # Информация
+    # -----------------------------------------------------
+
+    if query.data == "info":
+
+        await query.message.reply_text(
+
+            "CRM Monitoring\n\n"
+            "Компьютер отправляет только последнее "
+            "состояние.\n"
+            "История мониторинга не хранится.",
+
+            reply_markup=main_menu()
+        )
+
+        return
+
+
+    # -----------------------------------------------------
+    # Назад
+    # -----------------------------------------------------
+
+    if query.data == "back":
+
+        await query.message.reply_text(
+
+            "🖥 CRM Monitoring",
+
+            reply_markup=main_menu()
+        )
+
+        return
+
+
+# =========================================================
+# ЗАПРОС К НАШЕМУ API
+# =========================================================
+
+def server_request(
+    method,
+    path,
+    data=None,
+    admin=False
+):
+
+    url = SERVER_URL + path
+
+    headers = {
+        "Content-Type": "application/json"
+    }
+
+    if admin:
+
+        headers[
+            "Authorization"
+        ] = f"Bearer {API_SECRET}"
+
+    body = None
+
+    if data is not None:
+
+        body = json.dumps(
+            data
+        ).encode("utf-8")
+
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers=headers,
+        method=method
+    )
+
+    try:
+
+        with urllib.request.urlopen(
+            request,
+            timeout=10
+        ) as response:
+
+            return json.loads(
+                response.read().decode("utf-8")
+            )
+
+    except urllib.error.HTTPError as error:
+
+        try:
+
+            body = error.read().decode(
+                "utf-8"
+            )
+
+            return json.loads(body)
+
+        except Exception:
+
+            return {
+                "status": "error",
+                "message": f"HTTP {error.code}"
+            }
+
+    except Exception as error:
+
+        return {
+            "status": "error",
+            "message": str(error)
+        }
+
+
+async def server_request_async(
+    method,
+    path,
+    data=None,
+    admin=False
+):
+
+    return await asyncio.to_thread(
+
+        server_request,
+
+        method,
+        path,
+        data,
+        admin
+    )
+
+
+# =========================================================
+# ВВОД КОДА РЕГИСТРАЦИИ
+# =========================================================
+
+async def registration_code(update, context):
+
+    if not context.user_data.get(
+        "waiting_pairing_code"
+    ):
+        return
+
+    code = update.message.text.strip()
+
+    if len(code) != 6 or not code.isdigit():
+
+        await update.message.reply_text(
+            "Код должен состоять ровно из 6 цифр."
+        )
+
+        return
+
+    telegram_id = str(
+        update.effective_user.id
+    )
+
+    result = await server_request_async(
+
+        "POST",
+
+        "/api/register/confirm",
+
+        {
+            "telegram_id": telegram_id,
+            "code": code
+        }
+
+    )
+
+    if result.get("status") != "ok":
+
+        await update.message.reply_text(
+
+            "❌ Код недействителен, "
+            "истёк или уже использован.",
+
+            reply_markup=main_menu()
+        )
+
+        return
+
+
+    context.user_data[
+        "waiting_pairing_code"
+    ] = False
+
+
+    computer_id = result.get(
+        "computer_id",
+        "неизвестно"
+    )
+
+
+    await update.message.reply_text(
+
+        "✅ Регистрация компьютера подтверждена.\n\n"
+        "Агент теперь автоматически получит "
+        "токен доступа.\n\n"
+        f"Компьютер: {computer_id}",
+
+        reply_markup=main_menu()
+    )
+
+
+# =========================================================
+# СТАТУС КОМПЬЮТЕРА
+# =========================================================
+
+async def show_status(
+    message,
+    telegram_id
+):
+
+    result = await server_request_async(
+
+        "GET",
+
+        f"/api/user/status/{telegram_id}",
+
+        admin=True
+    )
+
+    status = result.get(
+        "status"
+    )
+
+
+    if status == "not_linked":
+
+        await message.reply_text(
+
+            "Компьютер ещё не привязан.",
+
+            reply_markup=main_menu()
+        )
+
+        return
+
+
+    if status == "not_found":
+
+        await message.reply_text(
+
+            "Компьютер привязан, "
+            "но данные от него ещё не получены.",
+
+            reply_markup=main_menu()
+        )
+
+        return
+
+
+    if status != "ok":
+
+        await message.reply_text(
+
+            "❌ Не удалось получить "
+            "состояние компьютера.\n\n"
+            f"Ошибка: {result.get('message', 'неизвестная ошибка')}",
+
+            reply_markup=main_menu()
+        )
+
+        return
+
+
+    computer_id = result.get(
+        "computer_id",
+        "неизвестно"
+    )
+
+    latest = result.get(
+        "data",
+        {}
+    )
+
+    data = latest.get(
+        "data",
+        {}
+    )
+
+
+    hostname = data.get(
+        "hostname",
+        "—"
+    )
+
+    cpu = data.get(
+        "cpu_percent",
+        "—"
+    )
+
+    threads = data.get(
+        "cpu_threads",
+        "—"
+    )
+
+    ram = data.get(
+        "ram_percent",
+        "—"
+    )
+
+    ram_used = data.get(
+        "ram_used_gb"
+    )
+
+    ram_total = data.get(
+        "ram_total_gb"
+    )
+
+    disks = data.get(
+        "disks",
+        []
+    )
+
+    received_at = latest.get(
+        "received_at",
+        "—"
+    )
+
+
+    text = (
+
+        "💻 Мой компьютер\n\n"
+
+        f"ID: {computer_id}\n"
+        f"Имя Windows: {hostname}\n\n"
+
+        f"CPU: {cpu}%\n"
+        f"Потоки CPU: {threads}\n"
+        f"RAM: {ram}%"
+    )
+
+
+    if (
+        ram_used is not None
+        and ram_total is not None
+    ):
+
+        text += (
+            f" ({ram_used} / {ram_total} GB)"
+        )
+
+
+    text += "\n\n💾 Диски:\n"
+
+
+    if disks:
+
+        for disk in disks:
+
+            device = disk.get(
+                "device",
+                "—"
+            )
+
+            mountpoint = disk.get(
+                "mountpoint",
+                "—"
+            )
+
+            total = disk.get(
+                "total_gb",
+                "—"
+            )
+
+            used = disk.get(
+                "used_gb",
+                "—"
+            )
+
+            free = disk.get(
+                "free_gb",
+                "—"
+            )
+
+            percent = disk.get(
+                "percent",
+                "—"
+            )
+
+            text += (
+
+                f"\n{device} {mountpoint}\n"
+
+                f"  Всего: {total} GB\n"
+                f"  Занято: {used} GB ({percent}%)\n"
+                f"  Свободно: {free} GB\n"
+            )
+
+    else:
+
+        text += (
+            "Нет данных о дисках.\n"
+        )
+
+
+    text += (
+
+        "\n🕒 Последние данные:\n"
+        f"{received_at}"
+    )
+
+
+    await message.reply_text(
+
+        text,
+
+        reply_markup=main_menu()
+    )
+
+
+# =========================================================
+# TELEGRAM ОШИБКИ
+# =========================================================
+
+async def error_handler(
+    update,
+    context
+):
+
+    print(
+        "Telegram error:",
+        context.error
+    )
+
+
+# =========================================================
+# СОЗДАНИЕ TELEGRAM APPLICATION
+# =========================================================
+
+def create_telegram_application():
+
+    if not BOT_TOKEN:
+        return None
+
+    application = (
+        Application.builder()
+        .token(BOT_TOKEN)
+        .build()
+    )
+
+
+    application.add_handler(
+        CommandHandler(
+            "start",
+            start
+        )
+    )
+
+
+    application.add_handler(
+        CallbackQueryHandler(
+            button
+        )
+    )
+
+
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT
+            & ~filters.COMMAND,
+            registration_code
+        )
+    )
+
+
+    application.add_error_handler(
+        error_handler
+    )
+
+
+    return application
+
+
+# =========================================================
+# LIFESPAN FASTAPI
+# =========================================================
+
+@asynccontextmanager
+async def lifespan(app):
+
+    global telegram_app
+
+    telegram_app = create_telegram_application()
+
+
+    if telegram_app:
+
+        await telegram_app.initialize()
+
+        await telegram_app.start()
+
+
+        webhook_url = (
+            f"{SERVER_URL}/telegram/webhook"
+        )
+
+
+        result = await telegram_app.bot.set_webhook(
+            url=webhook_url
+        )
+
+
+        print(
+            "Telegram webhook:",
+            webhook_url
+        )
+
+        print(
+            "Telegram webhook result:",
+            result
+        )
+
+
+    else:
+
+        print(
+            "TELEGRAM_BOT_TOKEN is not configured"
+        )
+
+
+    yield
+
+
+    if telegram_app:
+
+        await telegram_app.stop()
+
+        await telegram_app.shutdown()
+
+
+# =========================================================
+# FASTAPI
+# =========================================================
+
+app = FastAPI(
+    title="CRM Monitoring Server",
+    lifespan=lifespan
+)
+
+
+# =========================================================
 # ГЛАВНАЯ
 # =========================================================
 
 @app.get("/")
 def root():
+
     return {
+
         "status": "online",
-        "service": "CRM Monitoring Server",
+
+        "service": (
+            "CRM Monitoring Server"
+        )
+
     }
+
+
+# =========================================================
+# TELEGRAM WEBHOOK
+# =========================================================
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(
+    request: Request
+):
+
+    if not telegram_app:
+
+        return {
+            "status": "error",
+            "message": (
+                "Telegram bot is not configured"
+            )
+        }
+
+
+    try:
+
+        body = await request.json()
+
+        update = Update.de_json(
+            body,
+            telegram_app.bot
+        )
+
+
+        await telegram_app.process_update(
+            update
+        )
+
+
+        return {
+            "status": "ok"
+        }
+
+
+    except Exception as error:
+
+        print(
+            "Telegram webhook error:",
+            error
+        )
+
+        return {
+            "status": "error",
+            "message": str(error)
+        }
 
 
 # =========================================================
@@ -119,39 +1053,56 @@ def root():
 
 @app.post("/api/register/start")
 def register_start(data: dict):
-    """
-    Агент вызывает этот маршрут при первом запуске.
-
-    Получает одноразовый 6-значный код.
-    API_SECRET агенту не нужен.
-    """
 
     computer_id = str(
-        data.get("computer_id", "")
+        data.get(
+            "computer_id",
+            ""
+        )
     ).strip()
 
+
     if not computer_id:
+
         return {
+
             "status": "error",
-            "message": "computer_id is required",
+
+            "message": (
+                "computer_id is required"
+            )
+
         }
 
-    # Генерируем код регистрации.
+
     code = str(
-        secrets.randbelow(900000) + 100000
+        secrets.randbelow(900000)
+        + 100000
     )
 
+
     registration_codes[code] = {
+
         "computer_id": computer_id,
-        "created_at": datetime.now().isoformat(),
+
+        "created_at":
+            datetime.now().isoformat(),
+
         "confirmed": False,
+
         "telegram_id": None,
+
     }
 
+
     return {
+
         "status": "ok",
+
         "computer_id": computer_id,
+
         "code": code,
+
     }
 
 
@@ -161,68 +1112,126 @@ def register_start(data: dict):
 
 @app.post("/api/register/confirm")
 def register_confirm(data: dict):
-    """
-    Telegram подтверждает регистрацию компьютера.
-
-    ВАЖНО:
-    код здесь НЕ удаляется.
-
-    Агенту ещё необходимо получить токен
-    через /api/register/token.
-    """
 
     telegram_id = str(
-        data.get("telegram_id", "")
+        data.get(
+            "telegram_id",
+            ""
+        )
     ).strip()
+
 
     code = str(
-        data.get("code", "")
+        data.get(
+            "code",
+            ""
+        )
     ).strip()
 
+
     if not telegram_id:
+
         return {
+
             "status": "error",
-            "message": "telegram_id is required",
+
+            "message": (
+                "telegram_id is required"
+            )
+
         }
+
 
     if not code:
+
         return {
+
             "status": "error",
-            "message": "code is required",
+
+            "message": (
+                "code is required"
+            )
+
         }
 
-    registration = registration_codes.get(code)
+
+    registration = (
+        registration_codes.get(code)
+    )
+
 
     if not registration:
+
         return {
+
             "status": "error",
-            "message": "Invalid or expired registration code",
+
+            "message": (
+                "Invalid or expired "
+                "registration code"
+            )
+
         }
 
-    computer_id = registration["computer_id"]
 
-    # Привязываем компьютер к Telegram.
-    telegram_links[telegram_id] = computer_id
+    computer_id = (
+        registration["computer_id"]
+    )
 
-    # Создаём токен компьютера.
-    token = create_pc_token(computer_id)
+
+    telegram_links[
+        telegram_id
+    ] = computer_id
+
+
+    token = create_pc_token(
+        computer_id
+    )
+
 
     if not token:
+
         return {
+
             "status": "error",
-            "message": "API_SECRET is not configured",
+
+            "message": (
+                "API_SECRET is not configured"
+            )
+
         }
 
-    # Помечаем регистрацию как подтверждённую.
-    registration["confirmed"] = True
-    registration["telegram_id"] = telegram_id
-    registration["token"] = token
-    registration["confirmed_at"] = datetime.now().isoformat()
+
+    registration[
+        "confirmed"
+    ] = True
+
+
+    registration[
+        "telegram_id"
+    ] = telegram_id
+
+
+    registration[
+        "token"
+    ] = token
+
+
+    registration[
+        "confirmed_at"
+    ] = datetime.now().isoformat()
+
 
     return {
+
         "status": "ok",
-        "telegram_id": telegram_id,
-        "computer_id": computer_id,
+
+        "telegram_id":
+            telegram_id,
+
+        "computer_id":
+            computer_id,
+
     }
 
 
@@ -232,72 +1241,131 @@ def register_confirm(data: dict):
 
 @app.post("/api/register/token")
 def register_token(data: dict):
-    """
-    Агент использует этот маршрут после подтверждения
-    регистрации в Telegram.
-
-    Передаются компьютер и регистрационный код.
-
-    После успешной выдачи токена код удаляется.
-    """
 
     computer_id = str(
-        data.get("computer_id", "")
+        data.get(
+            "computer_id",
+            ""
+        )
     ).strip()
+
 
     code = str(
-        data.get("code", "")
+        data.get(
+            "code",
+            ""
+        )
     ).strip()
 
+
     if not computer_id:
+
         return {
+
             "status": "error",
-            "message": "computer_id is required",
+
+            "message": (
+                "computer_id is required"
+            )
+
         }
+
 
     if not code:
+
         return {
+
             "status": "error",
-            "message": "code is required",
+
+            "message": (
+                "code is required"
+            )
+
         }
 
-    registration = registration_codes.get(code)
+
+    registration = (
+        registration_codes.get(code)
+    )
+
 
     if not registration:
+
         return {
+
             "status": "error",
-            "message": "Invalid or expired registration code",
+
+            "message": (
+                "Invalid or expired "
+                "registration code"
+            )
+
         }
 
-    if registration["computer_id"] != computer_id:
+
+    if (
+        registration["computer_id"]
+        != computer_id
+    ):
+
         return {
+
             "status": "error",
-            "message": "Computer ID does not match",
+
+            "message": (
+                "Computer ID does not match"
+            )
+
         }
 
-    # Telegram должен сначала подтвердить регистрацию.
-    if not registration.get("confirmed"):
+
+    if not registration.get(
+        "confirmed"
+    ):
+
         return {
+
             "status": "error",
-            "message": "Registration is not confirmed",
+
+            "message": (
+                "Registration is not confirmed"
+            )
+
         }
 
-    token = registration.get("token")
+
+    token = registration.get(
+        "token"
+    )
+
 
     if not token:
+
         return {
+
             "status": "error",
-            "message": "Registration token is not available",
+
+            "message": (
+                "Registration token "
+                "is not available"
+            )
+
         }
 
-    # Теперь регистрационный код действительно становится
-    # одноразовым и удаляется.
+
     del registration_codes[code]
 
+
     return {
+
         "status": "ok",
-        "computer_id": computer_id,
-        "token": token,
+
+        "computer_id":
+            computer_id,
+
+        "token":
+            token,
+
     }
 
 
@@ -307,35 +1375,73 @@ def register_token(data: dict):
 
 @app.post("/api/admin/provision")
 def provision_pc(
+
     data: dict,
-    authorization: str | None = Header(default=None),
+
+    authorization:
+        str | None = Header(
+            default=None
+        ),
+
 ):
-    if not check_admin(authorization):
+
+    if not check_admin(
+        authorization
+    ):
+
         return {
+
             "status": "error",
+
             "message": "Unauthorized",
+
         }
 
-    computer_id = data.get("computer_id")
+
+    computer_id = data.get(
+        "computer_id"
+    )
+
 
     if not computer_id:
+
         return {
+
             "status": "error",
-            "message": "computer_id is required",
+
+            "message":
+                "computer_id is required",
+
         }
 
-    token = create_pc_token(computer_id)
+
+    token = create_pc_token(
+        computer_id
+    )
+
 
     if not token:
+
         return {
+
             "status": "error",
-            "message": "API_SECRET is not configured",
+
+            "message":
+                "API_SECRET is not configured",
+
         }
 
+
     return {
+
         "status": "ok",
-        "computer_id": computer_id,
-        "token": token,
+
+        "computer_id":
+            computer_id,
+
+        "token":
+            token,
+
     }
 
 
@@ -345,122 +1451,230 @@ def provision_pc(
 
 @app.post("/api/metrics")
 def receive_metrics(
+
     data: dict,
-    authorization: str | None = Header(default=None),
+
+    authorization:
+        str | None = Header(
+            default=None
+        ),
+
 ):
-    computer_id = data.get("computer_id")
+
+    computer_id = data.get(
+        "computer_id"
+    )
+
 
     if not computer_id:
+
         return {
+
             "status": "error",
-            "message": "computer_id is required",
+
+            "message":
+                "computer_id is required",
+
         }
+
 
     if not check_pc_token(
         computer_id,
         authorization
     ):
+
         return {
+
             "status": "error",
-            "message": "Unauthorized",
+
+            "message":
+                "Unauthorized",
+
         }
 
-    latest_data[computer_id] = {
+
+    latest_data[
+        computer_id
+    ] = {
+
         "data": data,
-        "received_at": datetime.now().isoformat(),
+
+        "received_at":
+            datetime.now().isoformat(),
+
     }
 
+
     return {
+
         "status": "ok",
+
     }
 
 
 # =========================================================
-# СОЗДАНИЕ КОДА ПРИВЯЗКИ
+# СТАРАЯ ПРИВЯЗКА
 # =========================================================
 
 @app.post("/api/pairing/create")
 def create_pairing_code(
+
     data: dict,
-    authorization: str | None = Header(default=None),
+
+    authorization:
+        str | None = Header(
+            default=None
+        ),
+
 ):
-    computer_id = data.get("computer_id")
+
+    computer_id = data.get(
+        "computer_id"
+    )
+
 
     if not computer_id:
+
         return {
+
             "status": "error",
-            "message": "computer_id is required",
+
+            "message":
+                "computer_id is required",
+
         }
+
 
     if not check_pc_token(
         computer_id,
         authorization
     ):
+
         return {
+
             "status": "error",
-            "message": "Unauthorized",
+
+            "message":
+                "Unauthorized",
+
         }
 
+
     code = str(
-        secrets.randbelow(900000) + 100000
+        secrets.randbelow(900000)
+        + 100000
     )
+
 
     pairing_codes[code] = {
-        "computer_id": computer_id,
-        "created_at": datetime.now().isoformat(),
+
+        "computer_id":
+            computer_id,
+
+        "created_at":
+            datetime.now().isoformat(),
+
     }
+
 
     return {
+
         "status": "ok",
-        "computer_id": computer_id,
-        "code": code,
+
+        "computer_id":
+            computer_id,
+
+        "code":
+            code,
+
     }
 
 
-# =========================================================
-# ПОДТВЕРЖДЕНИЕ ПРИВЯЗКИ
-# =========================================================
-
 @app.post("/api/pairing/confirm")
-def confirm_pairing(data: dict):
+def confirm_pairing(
+    data: dict
+):
+
     telegram_id = str(
-        data.get("telegram_id", "")
+        data.get(
+            "telegram_id",
+            ""
+        )
     )
+
 
     code = str(
-        data.get("code", "")
+        data.get(
+            "code",
+            ""
+        )
     )
 
+
     if not telegram_id:
+
         return {
+
             "status": "error",
-            "message": "telegram_id is required",
+
+            "message":
+                "telegram_id is required",
+
         }
+
 
     if not code:
+
         return {
+
             "status": "error",
-            "message": "code is required",
+
+            "message":
+                "code is required",
+
         }
 
-    pairing = pairing_codes.get(code)
+
+    pairing = pairing_codes.get(
+        code
+    )
+
 
     if not pairing:
+
         return {
+
             "status": "error",
-            "message": "Invalid or expired code",
+
+            "message":
+                "Invalid or expired code",
+
         }
 
-    computer_id = pairing["computer_id"]
 
-    telegram_links[telegram_id] = computer_id
+    computer_id = pairing[
+        "computer_id"
+    ]
+
+
+    telegram_links[
+        telegram_id
+    ] = computer_id
+
 
     del pairing_codes[code]
 
+
     return {
+
         "status": "ok",
-        "telegram_id": telegram_id,
-        "computer_id": computer_id,
+
+        "telegram_id":
+            telegram_id,
+
+        "computer_id":
+            computer_id,
+
     }
 
 
@@ -470,21 +1684,43 @@ def confirm_pairing(data: dict):
 
 @app.get("/api/status/{computer_id}")
 def get_status(
+
     computer_id: str,
-    authorization: str | None = Header(default=None),
+
+    authorization:
+        str | None = Header(
+            default=None
+        ),
+
 ):
-    if not check_admin(authorization):
+
+    if not check_admin(
+        authorization
+    ):
+
         return {
+
             "status": "error",
-            "message": "Unauthorized",
+
+            "message":
+                "Unauthorized",
+
         }
+
 
     if computer_id not in latest_data:
+
         return {
-            "status": "not_found",
+
+            "status":
+                "not_found",
+
         }
 
-    return latest_data[computer_id]
+
+    return latest_data[
+        computer_id
+    ]
 
 
 # =========================================================
@@ -493,32 +1729,69 @@ def get_status(
 
 @app.get("/api/user/status/{telegram_id}")
 def get_user_status(
+
     telegram_id: str,
-    authorization: str | None = Header(default=None),
+
+    authorization:
+        str | None = Header(
+            default=None
+        ),
+
 ):
-    if not check_admin(authorization):
+
+    if not check_admin(
+        authorization
+    ):
+
         return {
+
             "status": "error",
-            "message": "Unauthorized",
+
+            "message":
+                "Unauthorized",
+
         }
+
 
     computer_id = telegram_links.get(
         str(telegram_id)
     )
 
+
     if not computer_id:
+
         return {
-            "status": "not_linked",
+
+            "status":
+                "not_linked",
+
         }
+
 
     if computer_id not in latest_data:
+
         return {
-            "status": "not_found",
-            "computer_id": computer_id,
+
+            "status":
+                "not_found",
+
+            "computer_id":
+                computer_id,
+
         }
 
+
     return {
-        "status": "ok",
-        "computer_id": computer_id,
-        "data": latest_data[computer_id],
+
+        "status":
+            "ok",
+
+        "computer_id":
+            computer_id,
+
+        "data":
+            latest_data[
+                computer_id
+            ],
+
     }
