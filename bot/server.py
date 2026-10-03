@@ -136,7 +136,7 @@ def register_start(data: dict):
             "message": "computer_id is required",
         }
 
-    # Генерируем код.
+    # Генерируем код регистрации.
     code = str(
         secrets.randbelow(900000) + 100000
     )
@@ -144,6 +144,8 @@ def register_start(data: dict):
     registration_codes[code] = {
         "computer_id": computer_id,
         "created_at": datetime.now().isoformat(),
+        "confirmed": False,
+        "telegram_id": None,
     }
 
     return {
@@ -153,13 +155,20 @@ def register_start(data: dict):
     }
 
 
+# =========================================================
+# ПОДТВЕРЖДЕНИЕ РЕГИСТРАЦИИ TELEGRAM
+# =========================================================
+
 @app.post("/api/register/confirm")
 def register_confirm(data: dict):
     """
-    Подтверждение регистрации.
+    Telegram подтверждает регистрацию компьютера.
 
-    Этот маршрут в дальнейшем будет вызываться
-    Telegram-ботом после ввода пользователем кода.
+    ВАЖНО:
+    код здесь НЕ удаляется.
+
+    Агенту ещё необходимо получить токен
+    через /api/register/token.
     """
 
     telegram_id = str(
@@ -204,14 +213,16 @@ def register_confirm(data: dict):
             "message": "API_SECRET is not configured",
         }
 
-    # Одноразовый код больше не используется.
-    del registration_codes[code]
+    # Помечаем регистрацию как подтверждённую.
+    registration["confirmed"] = True
+    registration["telegram_id"] = telegram_id
+    registration["token"] = token
+    registration["confirmed_at"] = datetime.now().isoformat()
 
     return {
         "status": "ok",
         "telegram_id": telegram_id,
         "computer_id": computer_id,
-        "token": token,
     }
 
 
@@ -225,7 +236,9 @@ def register_token(data: dict):
     Агент использует этот маршрут после подтверждения
     регистрации в Telegram.
 
-    Передаётся компьютер и код регистрации.
+    Передаются компьютер и регистрационный код.
+
+    После успешной выдачи токена код удаляется.
     """
 
     computer_id = str(
@@ -262,13 +275,24 @@ def register_token(data: dict):
             "message": "Computer ID does not match",
         }
 
-    token = create_pc_token(computer_id)
+    # Telegram должен сначала подтвердить регистрацию.
+    if not registration.get("confirmed"):
+        return {
+            "status": "error",
+            "message": "Registration is not confirmed",
+        }
+
+    token = registration.get("token")
 
     if not token:
         return {
             "status": "error",
-            "message": "API_SECRET is not configured",
+            "message": "Registration token is not available",
         }
+
+    # Теперь регистрационный код действительно становится
+    # одноразовым и удаляется.
+    del registration_codes[code]
 
     return {
         "status": "ok",
