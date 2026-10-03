@@ -1,4 +1,3 @@
-```python
 import os
 import base64
 import hashlib
@@ -1988,4 +1987,3 @@ def get_user_status(
         },
 
     }
-```
