@@ -365,7 +365,7 @@ def db_save_metrics(
                 json.dumps(
                     data,
                     ensure_ascii=False
-                ).replace("\u0000", ""),
+                ).replace("\\u0000", ""),
             ))
 
             cur.execute("""
