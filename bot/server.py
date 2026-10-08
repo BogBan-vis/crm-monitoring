@@ -30,11 +30,6 @@ from telegram.ext import (
     filters,
 )
 
-
-# =========================================================
-# НАСТРОЙКА
-# =========================================================
-
 API_SECRET = os.getenv("API_SECRET")
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
@@ -50,17 +45,8 @@ WINDOWS_AGENT_URL = (
     "/releases/download/v1.1/CRM_Monitoring_Agent.exe"
 )
 
-
-# =========================================================
-# TELEGRAM APPLICATION
-# =========================================================
-
 telegram_app = None
 
-
-# =========================================================
-# DATABASE
-# =========================================================
 
 def get_db():
     if not DATABASE_URL:
@@ -84,8 +70,44 @@ def init_database():
                 CREATE TABLE IF NOT EXISTS computers (
                     computer_id TEXT PRIMARY KEY,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    last_seen TIMESTAMPTZ
+                    last_seen TIMESTAMPTZ,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    banned BOOLEAN NOT NULL DEFAULT FALSE,
+                    disconnected BOOLEAN NOT NULL DEFAULT FALSE,
+                    last_ip TEXT,
+                    last_country TEXT,
+                    last_city TEXT
                 )
+            """)
+
+            cur.execute("""
+                ALTER TABLE computers
+                ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active'
+            """)
+
+            cur.execute("""
+                ALTER TABLE computers
+                ADD COLUMN IF NOT EXISTS banned BOOLEAN NOT NULL DEFAULT FALSE
+            """)
+
+            cur.execute("""
+                ALTER TABLE computers
+                ADD COLUMN IF NOT EXISTS disconnected BOOLEAN NOT NULL DEFAULT FALSE
+            """)
+
+            cur.execute("""
+                ALTER TABLE computers
+                ADD COLUMN IF NOT EXISTS last_ip TEXT
+            """)
+
+            cur.execute("""
+                ALTER TABLE computers
+                ADD COLUMN IF NOT EXISTS last_country TEXT
+            """)
+
+            cur.execute("""
+                ALTER TABLE computers
+                ADD COLUMN IF NOT EXISTS last_city TEXT
             """)
 
             cur.execute("""
@@ -136,10 +158,6 @@ def init_database():
 
     print("PostgreSQL database initialized")
 
-
-# =========================================================
-# ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ БАЗЫ
-# =========================================================
 
 def db_register_computer(computer_id):
     with get_db() as conn:
@@ -363,9 +381,87 @@ def db_get_metrics(computer_id):
             return cur.fetchone()
 
 
-# =========================================================
-# ТОКЕНЫ КОМПЬЮТЕРОВ
-# =========================================================
+def db_get_computer(computer_id):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    computer_id,
+                    created_at,
+                    last_seen,
+                    status,
+                    banned,
+                    disconnected,
+                    last_ip,
+                    last_country,
+                    last_city
+                FROM computers
+                WHERE computer_id = %s
+            """, (computer_id,))
+
+            return cur.fetchone()
+
+
+def db_get_all_computers():
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT
+                    computer_id,
+                    created_at,
+                    last_seen,
+                    status,
+                    banned,
+                    disconnected,
+                    last_ip,
+                    last_country,
+                    last_city
+                FROM computers
+                ORDER BY computer_id
+            """)
+
+            return cur.fetchall()
+
+
+def db_set_computer_state(
+    computer_id,
+    status=None,
+    banned=None,
+    disconnected=None
+):
+    fields = []
+    values = []
+
+    if status is not None:
+        fields.append("status = %s")
+        values.append(status)
+
+    if banned is not None:
+        fields.append("banned = %s")
+        values.append(banned)
+
+    if disconnected is not None:
+        fields.append("disconnected = %s")
+        values.append(disconnected)
+
+    if not fields:
+        return
+
+    values.append(computer_id)
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                UPDATE computers
+                SET {", ".join(fields)}
+                WHERE computer_id = %s
+                """,
+                values
+            )
+
+        conn.commit()
+
 
 def create_pc_token(computer_id: str):
     if not API_SECRET:
@@ -427,10 +523,6 @@ def check_admin(authorization):
     )
 
 
-# =========================================================
-# TELEGRAM API
-# =========================================================
-
 def telegram_api_request(method, data=None):
     if not BOT_TOKEN:
         return {
@@ -475,10 +567,6 @@ def telegram_api_request(method, data=None):
             "description": str(error),
         }
 
-
-# =========================================================
-# TELEGRAM МЕНЮ
-# =========================================================
 
 def main_menu():
     keyboard = [
@@ -555,10 +643,6 @@ def linux_menu():
     return InlineKeyboardMarkup(keyboard)
 
 
-# =========================================================
-# TELEGRAM /start
-# =========================================================
-
 async def start(update, context):
     context.user_data["waiting_pairing_code"] = False
 
@@ -568,10 +652,6 @@ async def start(update, context):
         reply_markup=main_menu()
     )
 
-
-# =========================================================
-# TELEGRAM КНОПКИ
-# =========================================================
 
 async def button(update, context):
     query = update.callback_query
@@ -689,10 +769,6 @@ async def button(update, context):
         return
 
 
-# =========================================================
-# ЗАПРОС К НАШЕМУ API
-# =========================================================
-
 def server_request(
     method,
     path,
@@ -762,10 +838,6 @@ async def server_request_async(
     )
 
 
-# =========================================================
-# ВВОД КОДА РЕГИСТРАЦИИ
-# =========================================================
-
 async def registration_code(update, context):
     if not context.user_data.get(
         "waiting_pairing_code"
@@ -818,10 +890,6 @@ async def registration_code(update, context):
         reply_markup=main_menu()
     )
 
-
-# =========================================================
-# СТАТУС КОМПЬЮТЕРА
-# =========================================================
 
 async def show_status(message, telegram_id):
     result = await server_request_async(
@@ -903,15 +971,6 @@ async def show_status(message, telegram_id):
         "disks",
         []
     )
-
-    # =====================================================
-    # ВРЕМЯ КОМПЬЮТЕРА
-    #
-    # Берём local_time, который непосредственно
-    # отправляет Windows-агент.
-    #
-    # Это время самого компьютера, а не Render/PostgreSQL.
-    # =====================================================
 
     local_time = data.get(
         "local_time"
@@ -1004,20 +1063,12 @@ async def show_status(message, telegram_id):
     )
 
 
-# =========================================================
-# TELEGRAM ОШИБКИ
-# =========================================================
-
 async def error_handler(update, context):
     print(
         "Telegram error:",
         context.error
     )
 
-
-# =========================================================
-# СОЗДАНИЕ TELEGRAM APPLICATION
-# =========================================================
 
 def create_telegram_application():
     if not BOT_TOKEN:
@@ -1055,10 +1106,6 @@ def create_telegram_application():
 
     return application
 
-
-# =========================================================
-# LIFESPAN FASTAPI
-# =========================================================
 
 @asynccontextmanager
 async def lifespan(app):
@@ -1111,19 +1158,11 @@ async def lifespan(app):
         await telegram_app.shutdown()
 
 
-# =========================================================
-# FASTAPI
-# =========================================================
-
 app = FastAPI(
     title="CRM Monitoring Server",
     lifespan=lifespan
 )
 
-
-# =========================================================
-# ГЛАВНАЯ
-# =========================================================
 
 @app.get("/")
 def root():
@@ -1132,10 +1171,6 @@ def root():
         "service": "CRM Monitoring Server"
     }
 
-
-# =========================================================
-# TELEGRAM WEBHOOK
-# =========================================================
 
 @app.post("/telegram/webhook")
 async def telegram_webhook(
@@ -1177,10 +1212,6 @@ async def telegram_webhook(
         }
 
 
-# =========================================================
-# ПЕРВИЧНАЯ РЕГИСТРАЦИЯ АГЕНТА
-# =========================================================
-
 @app.post("/api/register/start")
 def register_start(data: dict):
     computer_id = str(
@@ -1211,10 +1242,6 @@ def register_start(data: dict):
         "code": code,
     }
 
-
-# =========================================================
-# ПОДТВЕРЖДЕНИЕ РЕГИСТРАЦИИ TELEGRAM
-# =========================================================
 
 @app.post("/api/register/confirm")
 def register_confirm(data: dict):
@@ -1286,10 +1313,6 @@ def register_confirm(data: dict):
         "computer_id": computer_id,
     }
 
-
-# =========================================================
-# ПОЛУЧЕНИЕ ТОКЕНА АГЕНТОМ
-# =========================================================
 
 @app.post("/api/register/token")
 def register_token(data: dict):
@@ -1366,10 +1389,6 @@ def register_token(data: dict):
     }
 
 
-# =========================================================
-# ADMIN PROVISION
-# =========================================================
-
 @app.post("/api/admin/provision")
 def provision_pc(
     data: dict,
@@ -1416,10 +1435,6 @@ def provision_pc(
     }
 
 
-# =========================================================
-# ПРИЁМ МЕТРИК
-# =========================================================
-
 @app.post("/api/metrics")
 def receive_metrics(
     data: dict,
@@ -1455,10 +1470,6 @@ def receive_metrics(
         "status": "ok",
     }
 
-
-# =========================================================
-# СТАРАЯ ПРИВЯЗКА
-# =========================================================
 
 @app.post("/api/pairing/create")
 def create_pairing_code(
@@ -1558,10 +1569,6 @@ def confirm_pairing(
     }
 
 
-# =========================================================
-# СТАТУС КОМПЬЮТЕРА
-# =========================================================
-
 @app.get("/api/status/{computer_id}")
 def get_status(
     computer_id: str,
@@ -1591,10 +1598,6 @@ def get_status(
         "received_at": latest["received_at"].isoformat(),
     }
 
-
-# =========================================================
-# СТАТУС КОМПЬЮТЕРА ПОЛЬЗОВАТЕЛЯ
-# =========================================================
 
 @app.get("/api/user/status/{telegram_id}")
 def get_user_status(
@@ -1637,4 +1640,269 @@ def get_user_status(
             "data": latest["data"],
             "received_at": latest["received_at"].isoformat(),
         },
+    }
+
+
+@app.get("/api/admin/devices")
+def admin_devices(
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    if not check_admin(
+        authorization
+    ):
+        return {
+            "status": "error",
+            "message": "Unauthorized",
+        }
+
+    devices = db_get_all_computers()
+
+    return {
+        "status": "ok",
+        "devices": [
+            {
+                "computer_id": device["computer_id"],
+                "created_at": device["created_at"].isoformat()
+                if device["created_at"]
+                else None,
+                "last_seen": device["last_seen"].isoformat()
+                if device["last_seen"]
+                else None,
+                "status": device["status"],
+                "banned": device["banned"],
+                "disconnected": device["disconnected"],
+                "last_ip": device["last_ip"],
+                "last_country": device["last_country"],
+                "last_city": device["last_city"],
+            }
+            for device in devices
+        ],
+    }
+
+
+@app.get("/api/admin/device/{computer_id}")
+def admin_device(
+    computer_id: str,
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    if not check_admin(
+        authorization
+    ):
+        return {
+            "status": "error",
+            "message": "Unauthorized",
+        }
+
+    computer = db_get_computer(
+        computer_id
+    )
+
+    if not computer:
+        return {
+            "status": "not_found",
+        }
+
+    latest = db_get_metrics(
+        computer_id
+    )
+
+    return {
+        "status": "ok",
+        "device": {
+            "computer_id": computer["computer_id"],
+            "created_at": computer["created_at"].isoformat()
+            if computer["created_at"]
+            else None,
+            "last_seen": computer["last_seen"].isoformat()
+            if computer["last_seen"]
+            else None,
+            "status": computer["status"],
+            "banned": computer["banned"],
+            "disconnected": computer["disconnected"],
+            "last_ip": computer["last_ip"],
+            "last_country": computer["last_country"],
+            "last_city": computer["last_city"],
+            "latest_metrics": latest["data"]
+            if latest
+            else None,
+            "metrics_received_at": latest["received_at"].isoformat()
+            if latest
+            else None,
+        },
+    }
+
+
+@app.post("/api/admin/device/{computer_id}/disconnect")
+def admin_disconnect_device(
+    computer_id: str,
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    if not check_admin(
+        authorization
+    ):
+        return {
+            "status": "error",
+            "message": "Unauthorized",
+        }
+
+    computer = db_get_computer(
+        computer_id
+    )
+
+    if not computer:
+        return {
+            "status": "not_found",
+        }
+
+    db_set_computer_state(
+        computer_id,
+        status="disconnected",
+        disconnected=True,
+    )
+
+    return {
+        "status": "ok",
+        "computer_id": computer_id,
+        "status": "disconnected",
+    }
+
+
+@app.post("/api/admin/device/{computer_id}/ban")
+def admin_ban_device(
+    computer_id: str,
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    if not check_admin(
+        authorization
+    ):
+        return {
+            "status": "error",
+            "message": "Unauthorized",
+        }
+
+    computer = db_get_computer(
+        computer_id
+    )
+
+    if not computer:
+        return {
+            "status": "not_found",
+        }
+
+    db_set_computer_state(
+        computer_id,
+        status="banned",
+        banned=True,
+        disconnected=False,
+    )
+
+    return {
+        "status": "ok",
+        "computer_id": computer_id,
+        "status": "banned",
+    }
+
+
+@app.post("/api/admin/device/{computer_id}/unban")
+def admin_unban_device(
+    computer_id: str,
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    if not check_admin(
+        authorization
+    ):
+        return {
+            "status": "error",
+            "message": "Unauthorized",
+        }
+
+    computer = db_get_computer(
+        computer_id
+    )
+
+    if not computer:
+        return {
+            "status": "not_found",
+        }
+
+    db_set_computer_state(
+        computer_id,
+        status="active",
+        banned=False,
+        disconnected=False,
+    )
+
+    return {
+        "status": "ok",
+        "computer_id": computer_id,
+        "status": "active",
+    }
+
+
+@app.post("/api/admin/device/{computer_id}/unlink")
+def admin_unlink_device(
+    computer_id: str,
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    if not check_admin(
+        authorization
+    ):
+        return {
+            "status": "error",
+            "message": "Unauthorized",
+        }
+
+    computer = db_get_computer(
+        computer_id
+    )
+
+    if not computer:
+        return {
+            "status": "not_found",
+        }
+
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                DELETE FROM telegram_links
+                WHERE computer_id = %s
+            """, (computer_id,))
+
+            cur.execute("""
+                DELETE FROM registration_codes
+                WHERE computer_id = %s
+            """, (computer_id,))
+
+            cur.execute("""
+                DELETE FROM pairing_codes
+                WHERE computer_id = %s
+            """, (computer_id,))
+
+            cur.execute("""
+                UPDATE computers
+                SET
+                    status = 'disconnected',
+                    disconnected = TRUE,
+                    banned = FALSE
+                WHERE computer_id = %s
+            """, (computer_id,))
+
+        conn.commit()
+
+    return {
+        "status": "ok",
+        "computer_id": computer_id,
+        "status": "disconnected",
     }
