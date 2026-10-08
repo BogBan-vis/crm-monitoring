@@ -362,7 +362,10 @@ def db_save_metrics(
                     received_at = NOW()
             """, (
                 computer_id,
-                json.dumps(data, ensure_ascii=False),
+                json.dumps(
+                    data,
+                    ensure_ascii=False
+                ).replace("\u0000", ""),
             ))
 
             cur.execute("""
