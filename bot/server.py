@@ -1445,7 +1445,47 @@ def register_token(data: dict):
 
     registration = db_get_registration(code)
 
-    if not registration:
+    if registration:
+        if registration["computer_id"] != computer_id:
+            return {
+                "status": "error",
+                "message": (
+                    "Computer ID does not match"
+                )
+            }
+
+        if not registration["confirmed"]:
+            return {
+                "status": "error",
+                "message": (
+                    "Registration is not confirmed"
+                )
+            }
+
+        token = registration["token"]
+
+        if not token:
+            return {
+                "status": "error",
+                "message": (
+                    "Registration token "
+                    "is not available"
+                )
+            }
+
+        db_delete_registration(code)
+
+        return {
+            "status": "ok",
+            "computer_id": computer_id,
+            "token": token,
+        }
+
+    computer = db_get_computer(
+        computer_id
+    )
+
+    if not computer:
         return {
             "status": "error",
             "message": (
@@ -1454,34 +1494,37 @@ def register_token(data: dict):
             )
         }
 
-    if registration["computer_id"] != computer_id:
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT telegram_id
+                FROM telegram_links
+                WHERE computer_id = %s
+                LIMIT 1
+            """, (computer_id,))
+
+            telegram_link = cur.fetchone()
+
+    if not telegram_link:
         return {
             "status": "error",
             "message": (
-                "Computer ID does not match"
+                "Computer is not linked "
+                "to Telegram"
             )
         }
 
-    if not registration["confirmed"]:
-        return {
-            "status": "error",
-            "message": (
-                "Registration is not confirmed"
-            )
-        }
-
-    token = registration["token"]
+    token = create_pc_token(
+        computer_id
+    )
 
     if not token:
         return {
             "status": "error",
             "message": (
-                "Registration token "
-                "is not available"
+                "API_SECRET is not configured"
             )
         }
-
-    db_delete_registration(code)
 
     return {
         "status": "ok",
