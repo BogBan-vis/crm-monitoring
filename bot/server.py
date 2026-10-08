@@ -259,7 +259,7 @@ def db_get_telegram_link(telegram_id):
                 SELECT computer_id
                 FROM telegram_links
                 WHERE telegram_id = %s
-            """, (str(telegram_id),))
+            """, (str(telegram_id,)))
 
             row = cur.fetchone()
 
@@ -904,10 +904,32 @@ async def show_status(message, telegram_id):
         []
     )
 
-    received_at = latest.get(
-        "received_at",
-        "—"
+    # =====================================================
+    # ВРЕМЯ КОМПЬЮТЕРА
+    #
+    # Берём local_time, который непосредственно
+    # отправляет Windows-агент.
+    #
+    # Это время самого компьютера, а не Render/PostgreSQL.
+    # =====================================================
+
+    local_time = data.get(
+        "local_time"
     )
+
+    if local_time:
+        try:
+            local_time_text = datetime.fromisoformat(
+                str(local_time)
+            ).strftime(
+                "%d.%m.%Y %H:%M:%S"
+            )
+
+        except Exception:
+            local_time_text = str(local_time)
+
+    else:
+        local_time_text = "—"
 
     text = (
         "💻 Мой компьютер\n\n"
@@ -971,43 +993,9 @@ async def show_status(message, telegram_id):
     else:
         text += "Нет данных о дисках.\n"
 
-    # PostgreSQL возвращает TIMESTAMPTZ.
-    # Переводим его в локальный часовой пояс
-    # системы, на которой работает сервер.
-    if received_at != "—":
-        try:
-            received_dt = datetime.fromisoformat(
-                str(received_at).replace(
-                    "Z",
-                    "+00:00"
-                )
-            )
-
-            if received_dt.tzinfo is not None:
-                local_dt = received_dt.astimezone()
-            else:
-                local_dt = received_dt.astimezone()
-
-            local_timezone = (
-                local_dt.tzname()
-                or "LOCAL"
-            )
-
-            received_at_text = (
-                local_dt.strftime(
-                    "%Y-%m-%d %H:%M:%S"
-                )
-                + f" ({local_timezone})"
-            )
-
-        except Exception:
-            received_at_text = str(received_at)
-    else:
-        received_at_text = "—"
-
     text += (
-        "\n🕒 Последние данные:\n"
-        f"{received_at_text}"
+        "\n🕒 Время компьютера:\n"
+        f"{local_time_text}"
     )
 
     await message.reply_text(
