@@ -259,7 +259,7 @@ def db_get_telegram_link(telegram_id):
                 SELECT computer_id
                 FROM telegram_links
                 WHERE telegram_id = %s
-            """, (str(telegram_id,)))
+            """, (str(telegram_id,))
 
             row = cur.fetchone()
 
