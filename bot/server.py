@@ -31,6 +31,7 @@ from telegram.ext import (
 )
 
 API_SECRET = os.getenv("API_SECRET")
+ADMIN_SECRET = os.getenv("ADMIN_SECRET")
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 SERVER_URL = os.getenv(
@@ -511,15 +512,31 @@ def check_pc_token(computer_id: str, token: str | None):
 
 
 def check_admin(authorization):
-    if not API_SECRET or not authorization:
+    if not authorization:
         return False
 
-    if authorization.startswith("Bearer "):
-        authorization = authorization[7:]
+    token = authorization.strip()
+
+    if token.startswith("Admin "):
+        token = token[6:].strip()
+
+        if not ADMIN_SECRET:
+            return False
+
+        return hmac.compare_digest(
+            token,
+            ADMIN_SECRET
+        )
+
+    if token.startswith("Bearer "):
+        token = token[7:].strip()
+
+    if not API_SECRET:
+        return False
 
     return hmac.compare_digest(
-        authorization,
-        API_SECRET,
+        token,
+        API_SECRET
     )
 
 
@@ -1386,6 +1403,48 @@ def register_token(data: dict):
         "status": "ok",
         "computer_id": computer_id,
         "token": token,
+    }
+
+
+@app.get("/api/admin/verify")
+def admin_verify(
+    authorization: str | None = Header(
+        default=None
+    ),
+):
+    if not authorization:
+        return {
+            "status": "error",
+            "message": "Unauthorized",
+        }
+
+    token = authorization.strip()
+
+    if not token.startswith("Admin "):
+        return {
+            "status": "error",
+            "message": "Unauthorized",
+        }
+
+    token = token[6:].strip()
+
+    if not ADMIN_SECRET:
+        return {
+            "status": "error",
+            "message": "ADMIN_SECRET is not configured",
+        }
+
+    if not hmac.compare_digest(
+        token,
+        ADMIN_SECRET
+    ):
+        return {
+            "status": "error",
+            "message": "Unauthorized",
+        }
+
+    return {
+        "status": "ok",
     }
 
 
