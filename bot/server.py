@@ -333,7 +333,13 @@ def db_delete_pairing(code):
         conn.commit()
 
 
-def db_save_metrics(computer_id, data):
+def db_save_metrics(
+    computer_id,
+    data,
+    ip=None,
+    country=None,
+    city=None
+):
     db_register_computer(computer_id)
 
     with get_db() as conn:
@@ -361,9 +367,18 @@ def db_save_metrics(computer_id, data):
 
             cur.execute("""
                 UPDATE computers
-                SET last_seen = NOW()
+                SET
+                    last_seen = NOW(),
+                    last_ip = COALESCE(%s, last_ip),
+                    last_country = COALESCE(%s, last_country),
+                    last_city = COALESCE(%s, last_city)
                 WHERE computer_id = %s
-            """, (computer_id,))
+            """, (
+                ip,
+                country,
+                city,
+                computer_id,
+            ))
 
         conn.commit()
 
@@ -462,6 +477,72 @@ def db_set_computer_state(
             )
 
         conn.commit()
+
+
+def get_client_ip(request: Request):
+    forwarded_for = request.headers.get(
+        "X-Forwarded-For"
+    )
+
+    if forwarded_for:
+        return forwarded_for.split(",")[0].strip()
+
+    real_ip = request.headers.get(
+        "X-Real-IP"
+    )
+
+    if real_ip:
+        return real_ip.strip()
+
+    if request.client:
+        return request.client.host
+
+    return None
+
+
+def get_ip_geolocation(ip):
+    if not ip:
+        return None, None
+
+    if ip in {
+        "127.0.0.1",
+        "localhost",
+        "::1"
+    }:
+        return None, None
+
+    try:
+        url = f"https://ipinfo.io/{ip}/json"
+
+        request = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "CRM-Monitoring-Server"
+            },
+            method="GET"
+        )
+
+        with urllib.request.urlopen(
+            request,
+            timeout=5
+        ) as response:
+
+            result = json.loads(
+                response.read().decode("utf-8")
+            )
+
+        country = result.get("country")
+        city = result.get("city")
+
+        return country, city
+
+    except Exception as error:
+        print(
+            "IP geolocation error:",
+            error
+        )
+
+        return None, None
 
 
 def create_pc_token(computer_id: str):
@@ -1497,6 +1578,7 @@ def provision_pc(
 @app.post("/api/metrics")
 def receive_metrics(
     data: dict,
+    request: Request,
     authorization: str | None = Header(
         default=None
     ),
@@ -1520,9 +1602,20 @@ def receive_metrics(
             "message": "Unauthorized",
         }
 
+    client_ip = get_client_ip(
+        request
+    )
+
+    country, city = get_ip_geolocation(
+        client_ip
+    )
+
     db_save_metrics(
         computer_id,
-        data
+        data,
+        client_ip,
+        country,
+        city
     )
 
     return {
