@@ -3,6 +3,7 @@ import json
 import asyncio
 import urllib.request
 import urllib.error
+from datetime import datetime
 
 from telegram import (
     Update,
@@ -672,10 +673,45 @@ async def show_status(
     )
 
 
-    received_at = latest.get(
-        "received_at",
-        "—"
+    # =====================================================
+    # ВРЕМЯ КОМПЬЮТЕРА
+    #
+    # Берём local_time, который непосредственно
+    # отправляет Windows-агент.
+    #
+    # Это сохраняет часовой пояс самого компьютера.
+    # =====================================================
+
+    local_time = data.get(
+        "local_time"
     )
+
+
+    if local_time:
+
+        try:
+
+            local_time_text = datetime.fromisoformat(
+                local_time
+            ).strftime(
+                "%d.%m.%Y %H:%M:%S"
+            )
+
+        except Exception:
+
+            local_time_text = str(
+                local_time
+            )
+
+    else:
+
+        # Резервный вариант для старых данных,
+        # если local_time ещё отсутствует.
+
+        local_time_text = latest.get(
+            "received_at",
+            "—"
+        )
 
 
     text = (
@@ -767,8 +803,8 @@ async def show_status(
 
     text += (
 
-        f"\n🕒 Последние данные:\n"
-        f"{received_at}"
+        f"\n🕒 Время компьютера:\n"
+        f"{local_time_text}"
 
     )
 
