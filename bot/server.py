@@ -778,7 +778,14 @@ async def start(update, context):
 async def button(update, context):
     query = update.callback_query
 
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception as error:
+        print(
+            "CALLBACK ANSWER ERROR:",
+            repr(error),
+            flush=True
+        )
 
     if query.data == "downloads":
         await query.message.reply_text(
