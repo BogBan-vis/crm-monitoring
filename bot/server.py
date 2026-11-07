@@ -745,13 +745,34 @@ def linux_menu():
 
 
 async def start(update, context):
-    context.user_data["waiting_pairing_code"] = False
+    try:
+        print(
+            "START HANDLER: received",
+            update.update_id,
+            flush=True
+        )
 
-    await update.message.reply_text(
-        "🖥 CRM Monitoring\n\n"
-        "Управление мониторингом компьютера.",
-        reply_markup=main_menu()
-    )
+        context.user_data["waiting_pairing_code"] = False
+
+        await update.message.reply_text(
+            "🖥 CRM Monitoring\n\n"
+            "Управление мониторингом компьютера.",
+            reply_markup=main_menu()
+        )
+
+        print(
+            "START HANDLER: response sent",
+            update.update_id,
+            flush=True
+        )
+
+    except Exception as error:
+        print(
+            "START HANDLER ERROR:",
+            repr(error),
+            flush=True
+        )
+        raise
 
 
 async def button(update, context):
@@ -1287,15 +1308,11 @@ def root():
 
 
 @app.post("/telegram/webhook")
-async def telegram_webhook(
-    request: Request
-):
+async def telegram_webhook(request: Request):
     if not telegram_app:
         return {
             "status": "error",
-            "message": (
-                "Telegram bot is not configured"
-            )
+            "message": "Telegram bot is not configured"
         }
 
     try:
@@ -1306,8 +1323,20 @@ async def telegram_webhook(
             telegram_app.bot
         )
 
-        asyncio.create_task(
-            telegram_app.process_update(update)
+        print(
+            "TELEGRAM UPDATE RECEIVED:",
+            update.update_id,
+            "MESSAGE:",
+            update.message.text if update.message else None,
+            flush=True
+        )
+
+        await telegram_app.process_update(update)
+
+        print(
+            "TELEGRAM UPDATE PROCESSED:",
+            update.update_id,
+            flush=True
         )
 
         return {
@@ -1317,7 +1346,8 @@ async def telegram_webhook(
     except Exception as error:
         print(
             "Telegram webhook error:",
-            error
+            repr(error),
+            flush=True
         )
 
         return {
