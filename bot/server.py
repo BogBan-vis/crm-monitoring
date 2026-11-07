@@ -1306,8 +1306,8 @@ async def telegram_webhook(
             telegram_app.bot
         )
 
-        await telegram_app.process_update(
-            update
+        asyncio.create_task(
+            telegram_app.process_update(update)
         )
 
         return {
