@@ -36,7 +36,7 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 SERVER_URL = os.getenv(
     "SERVER_URL",
-    "https://crm-monitoring-8yfm.onrender.com"
+    ""https://crm-monitoring.go.altare.global""
 ).rstrip("/")
 
 DATABASE_URL = os.getenv("DATABASE_URL")
