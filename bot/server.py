@@ -1,4 +1,3 @@
-
 import os
 import base64
 import hashlib
@@ -35,10 +34,7 @@ API_SECRET = os.getenv("API_SECRET")
 ADMIN_SECRET = os.getenv("ADMIN_SECRET")
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-SERVER_URL = os.getenv(
-    "SERVER_URL",
-    "https://crm-monitoring.go.altare.global"
-).rstrip("/")
+SERVER_URL = "https://crm-monitoring.go.altare.global"
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
@@ -143,6 +139,43 @@ def init_database():
             """)
 
             cur.execute("""
+                CREATE TABLE IF NOT EXISTS telegram_links_multi (
+                    telegram_id TEXT NOT NULL,
+                    computer_id TEXT NOT NULL
+                        REFERENCES computers(computer_id)
+                        ON DELETE CASCADE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (telegram_id, computer_id)
+                )
+            """)
+
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS telegram_links_multi_computer_id_idx
+                ON telegram_links_multi (computer_id)
+            """)
+
+            cur.execute("""
+                INSERT INTO telegram_links_multi (telegram_id, computer_id)
+                SELECT telegram_id, computer_id FROM telegram_links
+                ON CONFLICT (telegram_id, computer_id) DO NOTHING
+            """)
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS metric_alert_states (
+                    computer_id TEXT NOT NULL
+                        REFERENCES computers(computer_id)
+                        ON DELETE CASCADE,
+                    metric TEXT NOT NULL CHECK (metric IN ('cpu', 'ram')),
+                    level_85 BOOLEAN NOT NULL DEFAULT FALSE,
+                    level_90 BOOLEAN NOT NULL DEFAULT FALSE,
+                    level_95 BOOLEAN NOT NULL DEFAULT FALSE,
+                    level_100 BOOLEAN NOT NULL DEFAULT FALSE,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (computer_id, metric)
+                )
+            """)
+
+            cur.execute("""
                 CREATE TABLE IF NOT EXISTS latest_metrics (
                     computer_id TEXT PRIMARY KEY
                         REFERENCES computers(computer_id)
@@ -226,82 +259,75 @@ def db_confirm_registration(code, telegram_id, token):
                     AND confirmed = FALSE
                     AND created_at >= NOW() - INTERVAL '120 seconds'
                 RETURNING computer_id
-            """, (
-                telegram_id,
-                token,
-                code,
-            ))
-
+            """, (str(telegram_id), token, code))
             row = cur.fetchone()
-
             if row:
                 cur.execute("""
-                    INSERT INTO telegram_links (
-                        telegram_id,
-                        computer_id
-                    )
+                    INSERT INTO telegram_links_multi (telegram_id, computer_id)
                     VALUES (%s, %s)
-                    ON CONFLICT (telegram_id)
-                    DO UPDATE SET
-                        computer_id = EXCLUDED.computer_id
-                """, (
-                    str(telegram_id),
-                    row["computer_id"],
-                ))
-
+                    ON CONFLICT (telegram_id, computer_id) DO NOTHING
+                """, (str(telegram_id), row["computer_id"]))
         conn.commit()
-
     return row
-
-
-def db_delete_registration(code):
-    with get_db() as conn:
-        with conn.cursor() as cur:
-            cur.execute("""
-                DELETE FROM registration_codes
-                WHERE code = %s
-            """, (code,))
-
-        conn.commit()
 
 
 def db_set_telegram_link(telegram_id, computer_id):
     db_register_computer(computer_id)
-
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                INSERT INTO telegram_links (
-                    telegram_id,
-                    computer_id
-                )
+                INSERT INTO telegram_links_multi (telegram_id, computer_id)
                 VALUES (%s, %s)
-                ON CONFLICT (telegram_id)
-                DO UPDATE SET
-                    computer_id = EXCLUDED.computer_id
-            """, (
-                str(telegram_id),
-                computer_id,
-            ))
-
+                ON CONFLICT (telegram_id, computer_id) DO NOTHING
+            """, (str(telegram_id), computer_id))
         conn.commit()
 
 
-def db_get_telegram_link(telegram_id):
+def db_get_telegram_links(telegram_id):
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-                SELECT computer_id
-                FROM telegram_links
-                WHERE telegram_id = %s
+                SELECT l.computer_id, l.created_at, c.status, c.disconnected,
+                       COALESCE(m.data->>'hostname', m.data->>'device_name', l.computer_id) AS display_name
+                FROM telegram_links_multi l
+                JOIN computers c ON c.computer_id = l.computer_id
+                LEFT JOIN latest_metrics m ON m.computer_id = l.computer_id
+                WHERE l.telegram_id = %s
+                ORDER BY l.created_at DESC, l.computer_id
             """, (str(telegram_id),))
+            return cur.fetchall()
 
+
+def db_get_telegram_link(telegram_id):
+    links = db_get_telegram_links(telegram_id)
+    return links[0]["computer_id"] if links else None
+
+
+def db_remove_telegram_link(telegram_id, computer_id):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                DELETE FROM telegram_links_multi
+                WHERE telegram_id = %s AND computer_id = %s
+                RETURNING computer_id
+            """, (str(telegram_id), computer_id))
             row = cur.fetchone()
+        conn.commit()
+    return bool(row)
 
-    if not row:
-        return None
 
-    return row["computer_id"]
+def db_get_latest_linked_metrics(telegram_id):
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                SELECT l.computer_id, m.data, m.received_at
+                FROM telegram_links_multi l
+                JOIN latest_metrics m ON m.computer_id = l.computer_id
+                WHERE l.telegram_id = %s
+                ORDER BY m.received_at DESC
+                LIMIT 1
+            """, (str(telegram_id),))
+            return cur.fetchone()
 
 
 def db_create_pairing(code, computer_id):
@@ -330,7 +356,8 @@ def db_get_pairing(code):
                 SELECT
                     code,
                     computer_id,
-                    created_at
+                    created_at,
+                    (created_at >= NOW() - INTERVAL '120 seconds') AS valid
                 FROM pairing_codes
                 WHERE code = %s
             """, (code,))
@@ -357,49 +384,107 @@ def db_save_metrics(
     city=None
 ):
     db_register_computer(computer_id)
-
+    notifications = []
+    thresholds = (
+        (85, "level_85", "Высокая нагрузка"),
+        (90, "level_90", "Очень высокая нагрузка"),
+        (95, "level_95", "Опасная нагрузка"),
+        (100, "level_100", "Критическая нагрузка"),
+    )
     with get_db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
-                INSERT INTO latest_metrics (
-                    computer_id,
-                    data,
-                    received_at
-                )
-                VALUES (
-                    %s,
-                    %s::jsonb,
-                    NOW()
-                )
-                ON CONFLICT (computer_id)
-                DO UPDATE SET
-                    data = EXCLUDED.data,
-                    received_at = NOW()
-            """, (
-                computer_id,
-                json.dumps(
-                    data,
-                    ensure_ascii=False
-                ).replace("\\u0000", ""),
-            ))
-
+                INSERT INTO latest_metrics (computer_id, data, received_at)
+                VALUES (%s, %s::jsonb, NOW())
+                ON CONFLICT (computer_id) DO UPDATE
+                SET data = EXCLUDED.data, received_at = NOW()
+            """, (computer_id, json.dumps(data, ensure_ascii=False).replace("\\u0000", "")))
             cur.execute("""
-                UPDATE computers
-                SET
+                UPDATE computers SET
                     last_seen = NOW(),
                     last_ip = COALESCE(%s, last_ip),
                     last_country = COALESCE(%s, last_country),
                     last_city = COALESCE(%s, last_city)
                 WHERE computer_id = %s
-            """, (
-                ip,
-                country,
-                city,
-                computer_id,
-            ))
+            """, (ip, country, city, computer_id))
 
+            for metric, data_key in (("cpu", "cpu_percent"), ("ram", "ram_percent")):
+                try:
+                    value = float(data.get(data_key))
+                except (TypeError, ValueError):
+                    continue
+                cur.execute("""
+                    INSERT INTO metric_alert_states (computer_id, metric)
+                    VALUES (%s, %s)
+                    ON CONFLICT (computer_id, metric) DO NOTHING
+                """, (computer_id, metric))
+                cur.execute("""
+                    SELECT level_85, level_90, level_95, level_100
+                    FROM metric_alert_states
+                    WHERE computer_id = %s AND metric = %s
+                    FOR UPDATE
+                """, (computer_id, metric))
+                state = cur.fetchone()
+                if value < 80:
+                    cur.execute("""
+                        UPDATE metric_alert_states SET
+                            level_85 = FALSE, level_90 = FALSE,
+                            level_95 = FALSE, level_100 = FALSE, updated_at = NOW()
+                        WHERE computer_id = %s AND metric = %s
+                    """, (computer_id, metric))
+                    continue
+                changed = {}
+                for threshold, flag, label in thresholds:
+                    if value >= threshold and not state[flag]:
+                        changed[flag] = True
+                        notifications.append({
+                            "computer_id": computer_id,
+                            "metric": metric,
+                            "value": value,
+                            "label": label,
+                        })
+                if changed:
+                    assignments = ", ".join(f"{name} = TRUE" for name in changed)
+                    cur.execute(
+                        f"UPDATE metric_alert_states SET {assignments}, updated_at = NOW() "
+                        "WHERE computer_id = %s AND metric = %s",
+                        (computer_id, metric),
+                    )
         conn.commit()
+    return notifications
+
+
+def send_metric_notifications(notifications):
+    if not notifications:
+        return
+    for event in notifications:
+        try:
+            with get_db() as conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        SELECT l.telegram_id,
+                               COALESCE(m.data->>'hostname', m.data->>'device_name', 'Компьютер') AS device_name
+                        FROM telegram_links_multi l
+                        LEFT JOIN latest_metrics m ON m.computer_id = l.computer_id
+                        WHERE l.computer_id = %s
+                    """, (event["computer_id"],))
+                    recipients = cur.fetchall()
+            metric_name = "CPU" if event["metric"] == "cpu" else "RAM"
+            device_name = recipients[0]["device_name"] if recipients else "Компьютер"
+            message = (
+                f"⚠️ {event['label']}\n"
+                f"Устройство: {device_name}\n"
+                f"{metric_name}: {event['value']:g}%"
+            )
+            for recipient in recipients:
+                result = telegram_api_request("sendMessage", {
+                    "chat_id": recipient["telegram_id"],
+                    "text": message,
+                })
+                if not result.get("ok"):
+                    print("Telegram alert error:", result.get("description"), flush=True)
+        except Exception as error:
+            print("Metric notification error:", repr(error), flush=True)
 
 
 def db_get_metrics(computer_id):
@@ -687,76 +772,42 @@ def telegram_api_request(method, data=None):
 
 def main_menu():
     keyboard = [
-        [
-            InlineKeyboardButton(
-                "📥 Скачать агент",
-                callback_data="downloads"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "🔗 Привязать компьютер",
-                callback_data="pair"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "💻 Мой компьютер",
-                callback_data="status"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "ℹ️ Информация",
-                callback_data="info"
-            )
-        ]
+        [InlineKeyboardButton("📥 Скачать агента", callback_data="downloads")],
+        [InlineKeyboardButton("🔗 Привязать устройство", callback_data="pair")],
+        [InlineKeyboardButton("💻 Мои устройства", callback_data="my_devices")],
+        [InlineKeyboardButton("🔓 Отвязать устройство", callback_data="unlink_device")],
+        [InlineKeyboardButton("ℹ️ Информация", callback_data="info")],
+        [InlineKeyboardButton("📊 Последние метрики", callback_data="last_metrics")],
     ]
-
     return InlineKeyboardMarkup(keyboard)
 
 
 def downloads_menu():
     keyboard = [
-        [
-            InlineKeyboardButton(
-                "🪟 Windows",
-                callback_data="windows_download"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "🐧 Linux",
-                callback_data="linux_download"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "◀️ Назад",
-                callback_data="back"
-            )
-        ]
+        [InlineKeyboardButton("🪟 Windows", callback_data="windows_download")],
+        [InlineKeyboardButton("🐧 Linux", callback_data="linux_download")],
+        [InlineKeyboardButton("◀️ Назад", callback_data="back")],
     ]
-
     return InlineKeyboardMarkup(keyboard)
 
 
 def linux_menu():
     keyboard = [
-        [
-            InlineKeyboardButton(
-                "📦 Debian / Ubuntu",
-                callback_data="linux_deb"
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "◀️ Назад",
-                callback_data="downloads"
-            )
-        ]
+        [InlineKeyboardButton("Debian", callback_data="linux_debian")],
+        [InlineKeyboardButton("Ubuntu", callback_data="linux_ubuntu")],
+        [InlineKeyboardButton("Astra", callback_data="linux_astra")],
+        [InlineKeyboardButton("Arch", callback_data="linux_arch")],
+        [InlineKeyboardButton("◀️ Назад", callback_data="back")],
     ]
+    return InlineKeyboardMarkup(keyboard)
 
+
+def device_list_menu(devices, action):
+    keyboard = []
+    for index, device in enumerate(devices):
+        label = str(device.get("display_name") or device.get("computer_id") or "Устройство")
+        keyboard.append([InlineKeyboardButton(label[:60], callback_data=f"{action}:{index}")])
+    keyboard.append([InlineKeyboardButton("◀️ Назад", callback_data="back")])
     return InlineKeyboardMarkup(keyboard)
 
 
@@ -793,137 +844,159 @@ async def start(update, context):
 
 async def button(update, context):
     query = update.callback_query
-
     try:
         await query.answer()
     except Exception as error:
-        print(
-            "CALLBACK ANSWER ERROR:",
-            repr(error),
-            flush=True
-        )
+        print("CALLBACK ANSWER ERROR:", repr(error), flush=True)
 
-    if query.data == "downloads":
-        await query.message.reply_text(
-            "📥 Скачать агент\n\n"
-            "Выберите операционную систему.",
-            reply_markup=downloads_menu()
-        )
+    telegram_id = str(query.from_user.id)
+    action = query.data or ""
+
+    if action == "downloads":
+        await query.message.reply_text("📥 Скачать агента\n\nВыберите операционную систему.", reply_markup=downloads_menu())
         return
 
-    if query.data == "windows_download":
+    if action == "windows_download":
         keyboard = [
-            [
-                InlineKeyboardButton(
-                    "⬇️ Скачать Windows Agent",
-                    url=WINDOWS_AGENT_URL
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    "◀️ Назад",
-                    callback_data="downloads"
-                )
-            ]
+            [InlineKeyboardButton("⬇️ Скачать Windows Agent", url=WINDOWS_AGENT_URL)],
+            [InlineKeyboardButton("◀️ Назад", callback_data="downloads")],
         ]
-
         await query.message.reply_text(
-            "🪟 Windows\n\n"
-            "Нажмите кнопку ниже для загрузки агента.",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            "🪟 Windows\n\nНажмите кнопку ниже для загрузки агента.",
+            reply_markup=InlineKeyboardMarkup(keyboard),
         )
         return
 
-    if query.data == "linux_download":
+    if action == "linux_download":
+        await query.message.reply_text("🐧 Linux\n\nВыберите вариант.", reply_markup=linux_menu())
+        return
+
+    if action in {"linux_debian", "linux_ubuntu", "linux_astra", "linux_arch"}:
+        distro = action.removeprefix("linux_").capitalize()
         await query.message.reply_text(
-            "🐧 Linux\n\n"
-            "Выберите вариант.",
-            reply_markup=linux_menu()
+            f"🐧 Linux {distro}\n\nПакет агента пока не опубликован.",
+            reply_markup=linux_menu(),
         )
         return
 
-    if query.data == "linux_deb":
+    if action == "pair":
+        context.user_data["waiting_pairing_code"] = True
         await query.message.reply_text(
-            "🐧 Linux\n\n"
-            "Пакет агента для Debian / Ubuntu "
-            "пока не опубликован.",
-            reply_markup=linux_menu()
-        )
-        return
-
-    if query.data == "pair":
-
-        telegram_id = str(query.from_user.id)
-
-        existing_computer_id = db_get_telegram_link(
-            telegram_id
-        )
-
-        if existing_computer_id:
-
-            context.user_data[
-                "waiting_pairing_code"
-            ] = False
-
-            await query.message.reply_text(
-                "✅ Компьютер уже привязан.\n\n"
-                f"Компьютер: {existing_computer_id}\n\n"
-                "Чтобы посмотреть состояние, "
-                "нажмите «💻 Мой компьютер».",
-                reply_markup=main_menu()
-            )
-
-            return
-
-        context.user_data[
-            "waiting_pairing_code"
-        ] = True
-
-        await query.message.reply_text(
-            "🔗 Привязка компьютера\n\n"
+            "🔗 Привязка устройства\n\n"
             "1. Запустите агент на компьютере.\n"
-            "2. Агент автоматически покажет "
-            "6-значный код регистрации.\n"
-            "3. Введите этот код сюда."
-        )
-
-        return
-
-    if query.data == "status":
-        await show_status(
-            query.message,
-            query.from_user.id
+            "2. Дождитесь восьмизначного кода регистрации.\n"
+            "3. Отправьте код сюда.\n\n"
+            "Можно привязать несколько устройств к одному аккаунту."
         )
         return
 
-    if query.data == "info":
+    if action == "my_devices":
+        devices = await asyncio.to_thread(db_get_telegram_links, telegram_id)
+        context.user_data["device_list"] = [d["computer_id"] for d in devices]
+        if not devices:
+            await query.message.reply_text("К этому Telegram-аккаунту пока не привязано ни одного устройства.", reply_markup=main_menu())
+            return
+        await query.message.reply_text("💻 Ваши устройства. Выберите устройство:", reply_markup=device_list_menu(devices, "view_device"))
+        return
+
+    if action.startswith("view_device:"):
+        try:
+            index = int(action.split(":", 1)[1])
+            computer_id = context.user_data.get("device_list", [])[index]
+        except (ValueError, IndexError):
+            await query.message.reply_text("Список устройств устарел. Откройте «Мои устройства» ещё раз.", reply_markup=main_menu())
+            return
+        owned = await asyncio.to_thread(db_get_telegram_links, telegram_id)
+        if not any(row["computer_id"] == computer_id for row in owned):
+            await query.message.reply_text("Устройство не найдено среди ваших привязок.", reply_markup=main_menu())
+            return
+        await show_device_status(query.message, computer_id)
+        return
+
+    if action == "unlink_device":
+        devices = await asyncio.to_thread(db_get_telegram_links, telegram_id)
+        context.user_data["unlink_device_list"] = [d["computer_id"] for d in devices]
+        if not devices:
+            await query.message.reply_text("Нет устройств для отвязки.", reply_markup=main_menu())
+            return
+        await query.message.reply_text("Выберите устройство, которое нужно отвязать:", reply_markup=device_list_menu(devices, "select_unlink"))
+        return
+
+    if action.startswith("select_unlink:"):
+        try:
+            index = int(action.split(":", 1)[1])
+            computer_id = context.user_data.get("unlink_device_list", [])[index]
+        except (ValueError, IndexError):
+            await query.message.reply_text("Список устройств устарел. Откройте «Отвязать устройство» ещё раз.", reply_markup=main_menu())
+            return
+        owned = await asyncio.to_thread(db_get_telegram_links, telegram_id)
+        if not any(row["computer_id"] == computer_id for row in owned):
+            await query.message.reply_text("Устройство не найдено среди ваших привязок.", reply_markup=main_menu())
+            return
+        context.user_data["pending_unlink_device"] = computer_id
+        name = await asyncio.to_thread(get_device_display_name, computer_id)
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("Подтвердить", callback_data="confirm_unlink"),
+            InlineKeyboardButton("Отмена", callback_data="cancel_unlink"),
+        ]])
         await query.message.reply_text(
-            "ℹ️ CRM Monitoring\n\n"
-            "Компьютер отправляет только последнее "
-            "состояние.\n"
-            "История мониторинга не хранится.\n\n"
-            "⚠️ Важно при запуске агента\n\n"
-            "Windows может показать предупреждение, "
-            "что издатель приложения не сертифицирован. "
-            "Это связано с тем, что EXE не имеет цифровой подписи.\n\n"
-            "Если появится такое окно, нажмите "
-            "«Дополнительные сведения», а затем "
-            "«Выполнить в любом случае».\n\n"
-            "⏳ Первый запуск агента может занимать "
-            "некоторое время.\n"
-            "Если Windows временно показывает "
-            "«Приложение не отвечает», не закрывайте "
-            "его — просто немного подождите. "
-            "После запуска агент будет работать нормально.",
-            reply_markup=main_menu()
+            f"Вы уверены, что хотите отвязать данное устройство?\n\n{name}",
+            reply_markup=keyboard,
         )
         return
 
-    if query.data == "back":
+    if action == "confirm_unlink":
+        computer_id = context.user_data.get("pending_unlink_device")
+        if not computer_id:
+            await query.message.reply_text("Нет выбранного устройства для отвязки.", reply_markup=main_menu())
+            return
+        removed = await asyncio.to_thread(db_remove_telegram_link, telegram_id, computer_id)
+        context.user_data.pop("pending_unlink_device", None)
+        if removed:
+            await query.message.reply_text("✅ Устройство отвязано от вашего Telegram-аккаунта. Другие привязки не затронуты.", reply_markup=main_menu())
+        else:
+            await query.message.reply_text("Связь уже отсутствует.", reply_markup=main_menu())
+        return
+
+    if action == "cancel_unlink":
+        context.user_data.pop("pending_unlink_device", None)
+        await query.message.reply_text("Отмена. Изменений нет.", reply_markup=main_menu())
+        return
+
+    if action == "last_metrics":
+        latest = await asyncio.to_thread(db_get_latest_linked_metrics, telegram_id)
+        if not latest:
+            await query.message.reply_text("Нет метрик от привязанных устройств.", reply_markup=main_menu())
+            return
+        await send_metrics_message(query.message, latest["computer_id"], latest["data"], "📊 Последние метрики")
+        return
+
+    if action == "status":
+        devices = await asyncio.to_thread(db_get_telegram_links, telegram_id)
+        context.user_data["device_list"] = [d["computer_id"] for d in devices]
+        if len(devices) == 1:
+            await show_device_status(query.message, devices[0]["computer_id"])
+        elif devices:
+            await query.message.reply_text("Выберите устройство:", reply_markup=device_list_menu(devices, "view_device"))
+        else:
+            await query.message.reply_text("Устройства ещё не привязаны.", reply_markup=main_menu())
+        return
+
+    if action == "info":
         await query.message.reply_text(
-            "🖥 CRM Monitoring",
-            reply_markup=main_menu()
+            "CRM-мониторинг\n\n"
+            "Компьютер отправляет только последние состояния, история мониторинга не хранится.\n\n"
+            "При запуске агента Windows может выдать предупреждение из-за отсутствия сертификата. "
+            "Для продолжения нажмите «Подробнее» и «Выполнить в любом случае».\n\n"
+            "При ответе бота есть небольшая задержка.\n"
+            "Код подтверждения меняется каждые 120 секунд.",
+            reply_markup=main_menu(),
         )
+        return
+
+    if action == "back":
+        context.user_data["waiting_pairing_code"] = False
+        await query.message.reply_text("CRM-мониторинг", reply_markup=main_menu())
         return
 
 
@@ -997,208 +1070,109 @@ async def server_request_async(
 
 
 async def registration_code(update, context):
-    if not context.user_data.get(
-        "waiting_pairing_code"
-    ):
+    if not context.user_data.get("waiting_pairing_code"):
         return
-
     code = update.message.text.strip()
-
-    if len(code) != 6 or not code.isdigit():
-        await update.message.reply_text(
-            "Код должен состоять ровно из 6 цифр."
-        )
+    if len(code) != 8 or not code.isdigit():
+        await update.message.reply_text("Код должен состоять ровно из 8 цифр.")
         return
-
-    telegram_id = str(
-        update.effective_user.id
-    )
-
-    result = await server_request_async(
-        "POST",
-        "/api/register/confirm",
-        {
-            "telegram_id": telegram_id,
-            "code": code
-        }
-    )
-
+    telegram_id = str(update.effective_user.id)
+    result = await asyncio.to_thread(register_confirm, {"telegram_id": telegram_id, "code": code})
     if result.get("status") != "ok":
-        await update.message.reply_text(
-            "❌ Код недействителен, "
-            "истёк или уже использован.",
-            reply_markup=main_menu()
-        )
+        await update.message.reply_text("❌ Код недействителен, истёк или уже использован.", reply_markup=main_menu())
         return
-
-    context.user_data[
-        "waiting_pairing_code"
-    ] = False
-
-    computer_id = result.get(
-        "computer_id",
-        "неизвестно"
-    )
-
+    context.user_data["waiting_pairing_code"] = False
+    if result.get("already_linked"):
+        await update.message.reply_text("Это устройство уже привязано к вашему Telegram-аккаунту.", reply_markup=main_menu())
+        return
     await update.message.reply_text(
-        "✅ Регистрация компьютера подтверждена.\n\n"
-        "Агент теперь автоматически получит "
-        "токен доступа.\n\n"
-        f"Компьютер: {computer_id}",
-        reply_markup=main_menu()
+        "✅ Устройство успешно привязано. Агент автоматически получит токен доступа.",
+        reply_markup=main_menu(),
     )
 
 
-async def show_status(message, telegram_id):
-    computer_id = await asyncio.to_thread(
-        db_get_telegram_link,
-        str(telegram_id)
-    )
+def get_device_display_name(computer_id):
+    latest = db_get_metrics(computer_id)
+    data = latest.get("data") if latest else {}
+    if isinstance(data, dict):
+        name = data.get("hostname") or data.get("device_name")
+        if name:
+            return str(name)
+    return "Компьютер"
 
-    if not computer_id:
-        await message.reply_text(
-            "Компьютер ещё не привязан.",
-            reply_markup=main_menu()
-        )
-        return
 
-    latest = await asyncio.to_thread(
-        db_get_metrics,
-        computer_id
-    )
-
-    if not latest:
-        await message.reply_text(
-            "Компьютер привязан, "
-            "но данные от него ещё не получены.",
-            reply_markup=main_menu()
-        )
-        return
-
-    data = latest.get("data") or {}
-
-    hostname = data.get(
-        "hostname",
-        "—"
-    )
-
-    cpu = data.get(
-        "cpu_percent",
-        "—"
-    )
-
-    network_connections = data.get(
-        "network_connections",
-        "—"
-    )
-
-    ram = data.get(
-        "ram_percent",
-        "—"
-    )
-
-    ram_used = data.get(
-        "ram_used_gb"
-    )
-
-    ram_total = data.get(
-        "ram_total_gb"
-    )
-
-    disks = data.get(
-        "disks",
-        []
-    )
-
-    local_time = data.get(
-        "local_time"
-    )
-
+async def send_metrics_message(message, computer_id, data, title="💻 Состояние устройства"):
+    if not isinstance(data, dict):
+        data = {}
+    hostname = data.get("hostname") or data.get("device_name") or "—"
+    cpu = data.get("cpu_percent", "—")
+    network_connections = data.get("network_connections", "—")
+    ram = data.get("ram_percent", "—")
+    ram_used = data.get("ram_used_gb")
+    ram_total = data.get("ram_total_gb")
+    disks = data.get("disks") or []
+    local_time = data.get("local_time")
     if local_time:
         try:
-            local_time_text = datetime.fromisoformat(
-                str(local_time)
-            ).strftime(
-                "%d.%m.%Y %H:%M:%S"
-            )
-
+            local_time_text = datetime.fromisoformat(str(local_time)).strftime("%d.%m.%Y %H:%M:%S")
         except Exception:
             local_time_text = str(local_time)
-
     else:
         local_time_text = "—"
-
     text = (
-        "💻 Мой компьютер\n\n"
-        f"ID: {computer_id}\n"
-        f"Имя Windows: {hostname}\n\n"
+        f"{title}\n\n"
+        f"Имя устройства: {hostname}\n\n"
         f"CPU: {cpu}%\n"
         f"Сетевые соединения: {network_connections}\n"
         f"RAM: {ram}%"
     )
-
-    if (
-        ram_used is not None
-        and ram_total is not None
-    ):
-        text += (
-            f" ({ram_used} / {ram_total} GB)"
-        )
-
+    if ram_used is not None and ram_total is not None:
+        text += f" ({ram_used} / {ram_total} GB)"
     text += "\n\n💾 Диски:\n"
-
     if disks:
         for disk in disks:
-
-            device = disk.get(
-                "device",
-                "—"
-            )
-
-            mountpoint = disk.get(
-                "mountpoint",
-                "—"
-            )
-
-            total = disk.get(
-                "total_gb",
-                "—"
-            )
-
-            used = disk.get(
-                "used_gb",
-                "—"
-            )
-
-            free = disk.get(
-                "free_gb",
-                "—"
-            )
-
-            percent = disk.get(
-                "percent",
-                "—"
-            )
-
+            device = str(disk.get("device") or "—").strip()
+            mountpoint = str(disk.get("mountpoint") or "").strip()
+            norm_device = device.rstrip("\\/").rstrip(":").casefold()
+            norm_mount = mountpoint.rstrip("\\/").rstrip(":").casefold()
+            disk_name = device if not mountpoint or norm_device == norm_mount else f"{device} ({mountpoint})"
+            total = disk.get("total_gb", "—")
+            used = disk.get("used_gb", "—")
+            free = disk.get("free_gb", "—")
+            percent = disk.get("percent", "—")
             text += (
-                f"\n{device} {mountpoint}\n"
+                f"\n{disk_name}\n"
                 f"  Всего: {total} GB\n"
                 f"  Занято: {used} GB ({percent}%)\n"
                 f"  Свободно: {free} GB\n"
             )
-
     else:
         text += "Нет данных о дисках.\n"
+    text += f"\n🕒 Время компьютера:\n{local_time_text}"
+    await message.reply_text(text, reply_markup=main_menu())
 
-    text += (
-        "\n🕒 Время компьютера:\n"
-        f"{local_time_text}"
-    )
 
-    await message.reply_text(
-        text,
-        reply_markup=main_menu()
-    )
+async def show_device_status(message, computer_id):
+    try:
+        latest = await asyncio.to_thread(db_get_metrics, computer_id)
+        if not latest:
+            name = await asyncio.to_thread(get_device_display_name, computer_id)
+            await message.reply_text(f"Устройство {name} привязано, но данные от него ещё не получены.", reply_markup=main_menu())
+            return
+        await send_metrics_message(message, computer_id, latest.get("data") or {})
+    except Exception as error:
+        print("STATUS HANDLER ERROR:", repr(error), flush=True)
+        await message.reply_text("❌ Не удалось получить состояние устройства. Проверьте подключение PostgreSQL.", reply_markup=main_menu())
+
+
+async def show_status(message, telegram_id):
+    devices = await asyncio.to_thread(db_get_telegram_links, str(telegram_id))
+    if not devices:
+        await message.reply_text("Устройства ещё не привязаны.", reply_markup=main_menu())
+    elif len(devices) == 1:
+        await show_device_status(message, devices[0]["computer_id"])
+    else:
+        await message.reply_text("Выберите устройство:", reply_markup=device_list_menu(devices, "view_device"))
 
 
 async def error_handler(update, context):
@@ -1331,6 +1305,8 @@ async def telegram_webhook(request: Request):
             update.update_id,
             "MESSAGE:",
             update.message.text if update.message else None,
+            "CALLBACK:",
+            update.callback_query.data if update.callback_query else None,
             flush=True
         )
 
@@ -1375,7 +1351,7 @@ def register_start(data: dict):
         }
 
     code = str(
-        secrets.randbelow(900000) + 100000
+        secrets.randbelow(90000000) + 10000000
     )
 
     db_create_registration(
@@ -1449,6 +1425,11 @@ def register_confirm(data: dict):
             )
         }
 
+    already_linked = any(
+        row["computer_id"] == computer_id
+        for row in db_get_telegram_links(telegram_id)
+    )
+
     confirmed = db_confirm_registration(
         code,
         telegram_id,
@@ -1468,6 +1449,7 @@ def register_confirm(data: dict):
         "status": "ok",
         "telegram_id": telegram_id,
         "computer_id": confirmed["computer_id"],
+        "already_linked": already_linked,
     }
 
 
@@ -1578,7 +1560,7 @@ def register_token(data: dict):
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT telegram_id
-                FROM telegram_links
+                FROM telegram_links_multi
                 WHERE computer_id = %s
                 LIMIT 1
             """, (computer_id,))
@@ -1756,13 +1738,14 @@ def receive_metrics(
         client_ip
     )
 
-    db_save_metrics(
+    notifications = db_save_metrics(
         computer_id,
         data,
         client_ip,
         country,
         city
     )
+    send_metric_notifications(notifications)
 
     return {
         "status": "ok",
@@ -1796,7 +1779,7 @@ def create_pairing_code(
         }
 
     code = str(
-        secrets.randbelow(900000) + 100000
+        secrets.randbelow(90000000) + 10000000
     )
 
     db_create_pairing(
@@ -1843,7 +1826,7 @@ def confirm_pairing(
 
     pairing = db_get_pairing(code)
 
-    if not pairing:
+    if not pairing or not pairing.get("valid"):
         return {
             "status": "error",
             "message": "Invalid or expired code",
@@ -1900,40 +1883,17 @@ def get_status(
 @app.get("/api/user/status/{telegram_id}")
 def get_user_status(
     telegram_id: str,
-    authorization: str | None = Header(
-        default=None
-    ),
+    authorization: str | None = Header(default=None),
 ):
-    if not check_admin(
-        authorization
-    ):
-        return {
-            "status": "error",
-            "message": "Unauthorized",
-        }
-
-    computer_id = db_get_telegram_link(
-        str(telegram_id)
-    )
-
-    if not computer_id:
-        return {
-            "status": "not_linked",
-        }
-
-    latest = db_get_metrics(
-        computer_id
-    )
-
+    if not check_admin(authorization):
+        return {"status": "error", "message": "Unauthorized"}
+    latest = db_get_latest_linked_metrics(str(telegram_id))
     if not latest:
-        return {
-            "status": "not_found",
-            "computer_id": computer_id,
-        }
-
+        links = db_get_telegram_links(str(telegram_id))
+        return {"status": "not_found" if links else "not_linked"}
     return {
         "status": "ok",
-        "computer_id": computer_id,
+        "computer_id": latest["computer_id"],
         "data": {
             "data": latest["data"],
             "received_at": latest["received_at"].isoformat(),
@@ -2175,6 +2135,11 @@ def admin_unlink_device(
         with conn.cursor() as cur:
             cur.execute("""
                 DELETE FROM telegram_links
+                WHERE computer_id = %s
+            """, (computer_id,))
+
+            cur.execute("""
+                DELETE FROM telegram_links_multi
                 WHERE computer_id = %s
             """, (computer_id,))
 
