@@ -1,3 +1,4 @@
+
 import os
 import base64
 import hashlib
@@ -1049,22 +1050,24 @@ async def registration_code(update, context):
 
 
 async def show_status(message, telegram_id):
-    result = await server_request_async(
-        "GET",
-        f"/api/user/status/{telegram_id}",
-        admin=True
+    computer_id = await asyncio.to_thread(
+        db_get_telegram_link,
+        str(telegram_id)
     )
 
-    status = result.get("status")
-
-    if status == "not_linked":
+    if not computer_id:
         await message.reply_text(
             "Компьютер ещё не привязан.",
             reply_markup=main_menu()
         )
         return
 
-    if status == "not_found":
+    latest = await asyncio.to_thread(
+        db_get_metrics,
+        computer_id
+    )
+
+    if not latest:
         await message.reply_text(
             "Компьютер привязан, "
             "но данные от него ещё не получены.",
@@ -1072,29 +1075,7 @@ async def show_status(message, telegram_id):
         )
         return
 
-    if status != "ok":
-        await message.reply_text(
-            "❌ Не удалось получить "
-            "состояние компьютера.\n\n"
-            f"Ошибка: {result.get('message', 'неизвестная ошибка')}",
-            reply_markup=main_menu()
-        )
-        return
-
-    computer_id = result.get(
-        "computer_id",
-        "неизвестно"
-    )
-
-    latest = result.get(
-        "data",
-        {}
-    )
-
-    data = latest.get(
-        "data",
-        {}
-    )
+    data = latest.get("data") or {}
 
     hostname = data.get(
         "hostname",
