@@ -60,10 +60,6 @@ def get_db():
 
 
 def init_database():
-    if not DATABASE_URL:
-        print("DATABASE_URL is not configured")
-        return
-
     with get_db() as conn:
         with conn.cursor() as cur:
 
@@ -205,7 +201,8 @@ def db_get_registration(code):
                     confirmed,
                     telegram_id,
                     token,
-                    confirmed_at
+                    confirmed_at,
+                    (created_at >= NOW() - INTERVAL '120 seconds') AS valid
                 FROM registration_codes
                 WHERE code = %s
             """, (code,))
@@ -223,7 +220,10 @@ def db_confirm_registration(code, telegram_id, token):
                     telegram_id = %s,
                     token = %s,
                     confirmed_at = NOW()
-                WHERE code = %s
+                WHERE
+                    code = %s
+                    AND confirmed = FALSE
+                    AND created_at >= NOW() - INTERVAL '120 seconds'
                 RETURNING computer_id
             """, (
                 telegram_id,
@@ -232,6 +232,21 @@ def db_confirm_registration(code, telegram_id, token):
             ))
 
             row = cur.fetchone()
+
+            if row:
+                cur.execute("""
+                    INSERT INTO telegram_links (
+                        telegram_id,
+                        computer_id
+                    )
+                    VALUES (%s, %s)
+                    ON CONFLICT (telegram_id)
+                    DO UPDATE SET
+                        computer_id = EXCLUDED.computer_id
+                """, (
+                    str(telegram_id),
+                    row["computer_id"],
+                ))
 
         conn.commit()
 
@@ -1433,6 +1448,12 @@ def register_confirm(data: dict):
             )
         }
 
+    if not registration["valid"] or registration["confirmed"]:
+        return {
+            "status": "error",
+            "message": "Invalid, expired or already used registration code"
+        }
+
     computer_id = registration["computer_id"]
 
     token = create_pc_token(
@@ -1447,21 +1468,25 @@ def register_confirm(data: dict):
             )
         }
 
-    db_set_telegram_link(
-        telegram_id,
-        computer_id
-    )
-
-    db_confirm_registration(
+    confirmed = db_confirm_registration(
         code,
         telegram_id,
         token
     )
 
+    if not confirmed:
+        return {
+            "status": "error",
+            "message": (
+                "Invalid, expired or already used "
+                "registration code"
+            )
+        }
+
     return {
         "status": "ok",
         "telegram_id": telegram_id,
-        "computer_id": computer_id,
+        "computer_id": confirmed["computer_id"],
     }
 
 
@@ -1496,6 +1521,12 @@ def register_token(data: dict):
     registration = db_get_registration(code)
 
     if registration:
+        if not registration["valid"]:
+            return {
+                "status": "error",
+                "message": "Invalid or expired registration code"
+            }
+
         if registration["computer_id"] != computer_id:
             return {
                 "status": "error",
@@ -1523,7 +1554,25 @@ def register_token(data: dict):
                 )
             }
 
-        db_delete_registration(code)
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    DELETE FROM registration_codes
+                    WHERE
+                        code = %s
+                        AND computer_id = %s
+                        AND confirmed = TRUE
+                        AND created_at >= NOW() - INTERVAL '120 seconds'
+                    RETURNING code
+                """, (code, computer_id))
+                consumed = cur.fetchone()
+            conn.commit()
+
+        if not consumed:
+            return {
+                "status": "error",
+                "message": "Invalid, expired or already used registration code"
+            }
 
         return {
             "status": "ok",
@@ -1696,6 +1745,26 @@ def receive_metrics(
         return {
             "status": "error",
             "message": "Unauthorized",
+        }
+
+    computer = db_get_computer(computer_id)
+
+    if not computer:
+        return {
+            "status": "error",
+            "message": "Computer is not provisioned",
+        }
+
+    if computer["banned"]:
+        return {
+            "status": "error",
+            "message": "Computer is banned",
+        }
+
+    if computer["disconnected"]:
+        return {
+            "status": "error",
+            "message": "Computer is disconnected",
         }
 
     client_ip = get_client_ip(
@@ -2017,7 +2086,7 @@ def admin_disconnect_device(
     return {
         "status": "ok",
         "computer_id": computer_id,
-        "status": "disconnected",
+        "device_status": "disconnected",
     }
 
 
@@ -2055,7 +2124,7 @@ def admin_ban_device(
     return {
         "status": "ok",
         "computer_id": computer_id,
-        "status": "banned",
+        "device_status": "banned",
     }
 
 
@@ -2093,7 +2162,7 @@ def admin_unban_device(
     return {
         "status": "ok",
         "computer_id": computer_id,
-        "status": "active",
+        "device_status": "active",
     }
 
 
@@ -2152,5 +2221,5 @@ def admin_unlink_device(
     return {
         "status": "ok",
         "computer_id": computer_id,
-        "status": "disconnected",
+        "device_status": "disconnected",
     }
