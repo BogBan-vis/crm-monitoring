@@ -236,7 +236,14 @@ def db_get_registration(code):
                     telegram_id,
                     token,
                     confirmed_at,
-                    (created_at >= NOW() - INTERVAL '120 seconds') AS valid
+                    (
+                        created_at >= NOW() - INTERVAL '120 seconds'
+                        OR (
+                            confirmed = TRUE
+                            AND confirmed_at IS NOT NULL
+                            AND confirmed_at <= created_at + INTERVAL '120 seconds'
+                        )
+                    ) AS valid
                 FROM registration_codes
                 WHERE code = %s
             """, (code,))
@@ -269,6 +276,17 @@ def db_confirm_registration(code, telegram_id, token):
                 """, (str(telegram_id), row["computer_id"]))
         conn.commit()
     return row
+
+
+def db_delete_registration(code):
+    """Delete a registration code (kept for compatibility with existing callers)."""
+    with get_db() as conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+                DELETE FROM registration_codes
+                WHERE code = %s
+            """, (code,))
+        conn.commit()
 
 
 def db_set_telegram_link(telegram_id, computer_id):
@@ -1525,7 +1543,8 @@ def register_token(data: dict):
                         code = %s
                         AND computer_id = %s
                         AND confirmed = TRUE
-                        AND created_at >= NOW() - INTERVAL '120 seconds'
+                        AND confirmed_at IS NOT NULL
+                        AND confirmed_at <= created_at + INTERVAL '120 seconds'
                     RETURNING code
                 """, (code, computer_id))
                 consumed = cur.fetchone()
