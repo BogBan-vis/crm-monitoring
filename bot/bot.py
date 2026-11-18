@@ -1,3 +1,4 @@
+
 import os
 import json
 import asyncio
@@ -24,7 +25,7 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 SERVER_URL = os.getenv(
     "SERVER_URL",
-    "https://crm-monitoring-8yfm.onrender.com"
+    "https://crm-monitoring.go.altare.global"
 ).rstrip("/")
 
 API_SECRET = os.getenv("API_SECRET")
