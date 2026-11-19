@@ -1398,7 +1398,7 @@ def register_start(data: dict):
             "computer_id",
             ""
         )
-    ).strip()
+    )
 
     if not computer_id:
         return {
