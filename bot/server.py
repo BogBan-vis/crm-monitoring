@@ -1540,7 +1540,7 @@ def register_token(data: dict):
         return {
             "status": "error",
             "message": "Code must contain exactly 8 digits",
-        }.strip()
+        }
 
     if not computer_id:
         return {
