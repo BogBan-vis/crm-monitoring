@@ -274,6 +274,11 @@ def db_confirm_registration(code, telegram_id, token):
                     VALUES (%s, %s)
                     ON CONFLICT (telegram_id, computer_id) DO NOTHING
                 """, (str(telegram_id), row["computer_id"]))
+                cur.execute("""
+                    UPDATE computers
+                    SET status = 'active', disconnected = FALSE
+                    WHERE computer_id = %s AND banned = FALSE
+                """, (row["computer_id"],))
         conn.commit()
     return row
 
@@ -322,6 +327,9 @@ def db_get_telegram_link(telegram_id):
 
 
 def db_remove_telegram_link(telegram_id, computer_id):
+    """Удаляет связь только выбранного пользователя и отзывает доступ,
+    если у устройства больше не осталось Telegram-привязок.
+    """
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
@@ -330,6 +338,25 @@ def db_remove_telegram_link(telegram_id, computer_id):
                 RETURNING computer_id
             """, (str(telegram_id), computer_id))
             row = cur.fetchone()
+
+            # Удаляем также возможную старую связь из таблицы совместимости.
+            cur.execute("""
+                DELETE FROM telegram_links
+                WHERE telegram_id = %s AND computer_id = %s
+            """, (str(telegram_id), computer_id))
+
+            if row:
+                cur.execute("""
+                    SELECT 1 FROM telegram_links_multi
+                    WHERE computer_id = %s LIMIT 1
+                """, (computer_id,))
+                remaining = cur.fetchone()
+                if not remaining:
+                    cur.execute("""
+                        UPDATE computers
+                        SET status = 'disconnected', disconnected = TRUE
+                        WHERE computer_id = %s AND banned = FALSE
+                    """, (computer_id,))
         conn.commit()
     return bool(row)
 
@@ -708,9 +735,16 @@ def check_pc_token(computer_id: str, token: str | None):
         hashlib.sha256,
     ).hexdigest()
 
-    return hmac.compare_digest(
-        signature,
-        expected_signature,
+    if not hmac.compare_digest(signature, expected_signature):
+        return False
+
+    # Подписанный токен действителен только пока устройство активно.
+    computer = db_get_computer(computer_id)
+    return bool(
+        computer
+        and computer["status"] == "active"
+        and not computer["banned"]
+        and not computer["disconnected"]
     )
 
 
@@ -1101,7 +1135,11 @@ async def registration_code(update, context):
         return
     context.user_data["waiting_pairing_code"] = False
     if result.get("already_linked"):
-        await update.message.reply_text("Это устройство уже привязано к вашему Telegram-аккаунту.", reply_markup=main_menu())
+        await update.message.reply_text(
+            "✅ Это устройство уже было привязано к вашему Telegram-аккаунту. "
+            "Подтверждение выполнено, агент получит действующий токен.",
+            reply_markup=main_menu(),
+        )
         return
     await update.message.reply_text(
         "✅ Устройство успешно привязано. Агент автоматически получит токен доступа.",
@@ -1398,7 +1436,13 @@ def register_confirm(data: dict):
             "code",
             ""
         )
-    ).strip()
+    )
+
+    if len(code) != 8 or not code.isdigit():
+        return {
+            "status": "error",
+            "message": "Code must contain exactly 8 digits",
+        }.strip()
 
     if not telegram_id:
         return {
@@ -1430,6 +1474,11 @@ def register_confirm(data: dict):
         }
 
     computer_id = registration["computer_id"]
+    computer = db_get_computer(computer_id)
+    if not computer:
+        return {"status": "error", "message": "Computer not found"}
+    if computer["banned"]:
+        return {"status": "error", "message": "Computer is banned"}
 
     token = create_pc_token(
         computer_id
@@ -1485,7 +1534,13 @@ def register_token(data: dict):
             "code",
             ""
         )
-    ).strip()
+    )
+
+    if len(code) != 8 or not code.isdigit():
+        return {
+            "status": "error",
+            "message": "Code must contain exactly 8 digits",
+        }.strip()
 
     if not computer_id:
         return {
@@ -1523,6 +1578,11 @@ def register_token(data: dict):
                     "Registration is not confirmed"
                 )
             }
+
+        computer = db_get_computer(computer_id)
+        if (not computer or computer["banned"]
+                or computer["disconnected"] or computer["status"] != "active"):
+            return {"status": "error", "message": "Computer is disconnected or banned"}
 
         token = registration["token"]
 
@@ -1574,6 +1634,9 @@ def register_token(data: dict):
                 "registration code"
             )
         }
+
+    if computer["banned"] or computer["disconnected"] or computer["status"] != "active":
+        return {"status": "error", "message": "Computer is disconnected or banned"}
 
     with get_db() as conn:
         with conn.cursor() as cur:
@@ -1691,8 +1754,12 @@ def provision_pc(
             "message": "API_SECRET is not configured",
         }
 
-    db_register_computer(
-        computer_id
+    db_register_computer(computer_id)
+    computer = db_get_computer(computer_id)
+    if computer and computer["banned"]:
+        return {"status": "error", "message": "Computer is banned"}
+    db_set_computer_state(
+        computer_id, status="active", disconnected=False
     )
 
     return {
@@ -1700,6 +1767,19 @@ def provision_pc(
         "computer_id": computer_id,
         "token": token,
     }
+
+
+@app.post("/api/device/validate")
+def validate_device_token(
+    data: dict,
+    authorization: str | None = Header(default=None),
+):
+    computer_id = str(data.get("computer_id", "")).strip()
+    if not computer_id:
+        return {"status": "error", "message": "computer_id is required"}
+    if not check_pc_token(computer_id, authorization):
+        return {"status": "error", "message": "Unauthorized, disconnected or banned"}
+    return {"status": "ok", "computer_id": computer_id}
 
 
 @app.post("/api/metrics")
@@ -1830,6 +1910,12 @@ def confirm_pairing(
             ""
         )
     )
+
+    if len(code) != 8 or not code.isdigit():
+        return {
+            "status": "error",
+            "message": "Code must contain exactly 8 digits",
+        }
 
     if not telegram_id:
         return {
