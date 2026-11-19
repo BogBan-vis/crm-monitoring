@@ -1527,7 +1527,7 @@ def register_token(data: dict):
             "computer_id",
             ""
         )
-    ).strip()
+    )
 
     code = str(
         data.get(
