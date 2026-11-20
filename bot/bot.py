@@ -743,7 +743,7 @@ def linux_menu():
         [
             InlineKeyboardButton(
                 "🐧 Debian 13",
-                callback_data="linux_deb"
+                callback_data="linux_debian"
             )
         ],
         [
@@ -847,7 +847,7 @@ async def button(update, context):
         )
         return
 
-    if query.data == "linux_deb":
+    if query.data == "linux_debian":
         keyboard = [
             [
                 InlineKeyboardButton(
