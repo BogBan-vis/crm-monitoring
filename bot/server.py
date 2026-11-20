@@ -17,7 +17,12 @@ from psycopg.rows import dict_row
 from psycopg.errors import UniqueViolation
 
 from fastapi import FastAPI, Header, Request
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update,
+    InputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -38,6 +43,11 @@ SERVER_URL = "https://crm-monitoring.go.altare.global"
 WINDOWS_AGENT_URL = (
     "https://github.com/BogBan-vis/crm-monitoring"
     "/releases/download/v1.1/CRM_Monitoring_Agent.exe"
+)
+
+LINUX_AGENT_URL = (
+    "https://github.com/BogBan-vis/crm-monitoring"
+    "/releases/download/v1.1/CRM-Agent.deb"
 )
 
 REGISTRATION_CODE_LIFETIME = 120
@@ -156,7 +166,6 @@ def init_database():
                 ON telegram_links_multi (computer_id)
             """)
 
-            # Перенос старых привязок в новую таблицу.
             cur.execute("""
                 INSERT INTO telegram_links_multi (telegram_id, computer_id)
                 SELECT telegram_id, computer_id
@@ -208,10 +217,6 @@ def db_register_computer(computer_id):
 
 
 def generate_unique_code(table_name, computer_id):
-    """
-    Создаёт восьмизначный код с повтором при редком конфликте PK.
-    Имя таблицы выбирается только из внутреннего списка.
-    """
     if table_name not in {"registration_codes", "pairing_codes"}:
         raise ValueError("Invalid code table")
 
@@ -282,8 +287,6 @@ def db_get_registration(code):
 def db_confirm_registration(code, telegram_id, token):
     with get_db() as conn:
         with conn.cursor() as cur:
-
-            # Подтверждение кода выполняется атомарно.
             cur.execute("""
                 UPDATE registration_codes
                 SET
@@ -389,14 +392,8 @@ def db_get_telegram_link(telegram_id):
 
 
 def db_remove_telegram_link(telegram_id, computer_id):
-    """
-    Удаляет привязку конкретного Telegram-пользователя.
-    Если у устройства больше нет привязок ни в новой,
-    ни в старой таблице, устройство отключается.
-    """
     with get_db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
                 DELETE FROM telegram_links_multi
                 WHERE telegram_id = %s
@@ -544,7 +541,6 @@ def db_save_metrics(
 
     with get_db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
                 INSERT INTO latest_metrics (
                     computer_id,
@@ -820,11 +816,6 @@ def db_set_computer_state(
 # =========================================================
 
 def get_client_ip(request: Request):
-    """
-    Использует адрес клиента из соединения.
-    Заголовки прокси не принимаются вслепую, поскольку
-    их можно подделать при прямом доступе к серверу.
-    """
     if request.client:
         return request.client.host
 
@@ -1093,32 +1084,14 @@ def linux_menu():
     keyboard = [
         [
             InlineKeyboardButton(
-                "Debian",
+                "🐧 Debian 13",
                 callback_data="linux_debian",
             )
         ],
         [
             InlineKeyboardButton(
-                "Ubuntu",
-                callback_data="linux_ubuntu",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "Astra",
-                callback_data="linux_astra",
-            )
-        ],
-        [
-            InlineKeyboardButton(
-                "Arch",
-                callback_data="linux_arch",
-            )
-        ],
-        [
-            InlineKeyboardButton(
                 "◀️ Назад",
-                callback_data="back",
+                callback_data="downloads",
             )
         ],
     ]
@@ -1191,6 +1164,17 @@ async def start(update, context):
 async def button(update, context):
     query = update.callback_query
 
+    if not query:
+        return
+
+    print(
+        "TELEGRAM CALLBACK RECEIVED:",
+        query.data,
+        "FROM:",
+        query.from_user.id,
+        flush=True,
+    )
+
     try:
         await query.answer()
     except Exception as error:
@@ -1239,18 +1223,103 @@ async def button(update, context):
         )
         return
 
-    if action in {
-        "linux_debian",
-        "linux_ubuntu",
-        "linux_astra",
-        "linux_arch",
-    }:
-        distro = action.removeprefix("linux_").capitalize()
+    # Debian 13: запрос подтверждения скачивания.
+    if action == "linux_debian":
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "⬇️ Скачать",
+                    callback_data="linux_deb_download",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "❌ Отмена",
+                    callback_data="linux_deb_cancel",
+                )
+            ],
+        ]
 
         await query.message.reply_text(
-            f"🐧 Linux {distro}\n\nПакет агента пока не опубликован.",
+            "🐧 Debian 13\n\n"
+            "Скачать установочный пакет CRM Monitoring Agent?",
+            reply_markup=InlineKeyboardMarkup(keyboard),
+        )
+        return
+
+    # Debian 13: отмена скачивания.
+    if action == "linux_deb_cancel":
+        await query.message.reply_text(
+            "Загрузка отменена.",
             reply_markup=linux_menu(),
         )
+        return
+
+    # Debian 13: загрузка пакета и отправка его в Telegram.
+    if action == "linux_deb_download":
+        try:
+            def download_linux_agent():
+                request = urllib.request.Request(
+                    LINUX_AGENT_URL,
+                    headers={
+                        "User-Agent": "CRM-Monitoring-Telegram-Bot",
+                    },
+                )
+
+                with urllib.request.urlopen(
+                    request,
+                    timeout=60,
+                ) as response:
+                    if response.status != 200:
+                        raise RuntimeError(
+                            f"GitHub returned HTTP {response.status}"
+                        )
+
+                    package_data = response.read()
+
+                if not package_data:
+                    raise RuntimeError(
+                        "Downloaded package is empty"
+                    )
+
+                return package_data
+
+            package_data = await asyncio.to_thread(
+                download_linux_agent
+            )
+
+            package_file = InputFile(
+                package_data,
+                filename="CRM-Agent.deb",
+            )
+
+            await query.message.reply_document(
+                document=package_file,
+                filename="CRM-Agent.deb",
+                caption="🐧 CRM Monitoring Agent для Debian 13",
+            )
+
+            print(
+                "Debian 13 package sent to Telegram user:",
+                telegram_id,
+                "SIZE:",
+                len(package_data),
+                flush=True,
+            )
+
+        except Exception as error:
+            print(
+                "LINUX PACKAGE DOWNLOAD ERROR:",
+                repr(error),
+                flush=True,
+            )
+
+            await query.message.reply_text(
+                "❌ Не удалось скачать пакет Debian 13. "
+                "Попробуйте ещё раз позже.",
+                reply_markup=linux_menu(),
+            )
+
         return
 
     if action == "pair":
@@ -2153,8 +2222,6 @@ def register_token(data: dict):
 
     registration = db_get_registration(code)
 
-    # Больше нет выдачи токена только по computer_id
-    # и наличию Telegram-привязки.
     if not registration:
         return {
             "status": "error",
@@ -2198,9 +2265,6 @@ def register_token(data: dict):
             "message": "Computer is disconnected or banned",
         }
 
-    # Код не удаляем немедленно: если HTTP-ответ потеряется,
-    # агент сможет повторить запрос в пределах 120 секунд.
-    # Подтвердить его повторно через Telegram нельзя.
     return {
         "status": "ok",
         "computer_id": computer_id,
@@ -2784,7 +2848,6 @@ def admin_unlink_device(
 
     with get_db() as conn:
         with conn.cursor() as cur:
-
             cur.execute("""
                 DELETE FROM telegram_links
                 WHERE computer_id = %s
