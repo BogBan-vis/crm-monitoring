@@ -847,11 +847,31 @@ async def button(update, context):
         return
 
     if query.data == "linux_deb":
+        LINUX_AGENT_URL = (
+            "https://github.com/BogBan-vis/crm-monitoring"
+            "/releases/download/v1.1/CRM-Agent.deb"
+        )
+
+        keyboard = [
+            [
+                InlineKeyboardButton(
+                    "⬇️ Скачать агент Debian 13 (.deb)",
+                    url=LINUX_AGENT_URL
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    "◀️ Назад",
+                    callback_data="linux_download"
+                )
+            ]
+        ]
+
         await query.message.reply_text(
-            "🐧 Linux\n\n"
-            "Пакет агента для Debian / Ubuntu "
-            "пока не опубликован.",
-            reply_markup=linux_menu()
+            "🐧 Linux — Debian 13 / Ubuntu\n\n"
+            "Нажмите кнопку ниже, чтобы скачать установочный пакет CRM Monitoring Agent.\n\n"
+            "После скачивания откройте файл CRM-Agent.deb и установите его.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
 
