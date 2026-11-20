@@ -1049,7 +1049,7 @@ async def registration_code(update, context):
 
     if result.get("status") != "ok":
         await update.message.reply_text(
-            "❌ Код недействителен, "
+            "❌Код недействителен, "
             "истёк или уже использован.",
             reply_markup=main_menu()
         )
