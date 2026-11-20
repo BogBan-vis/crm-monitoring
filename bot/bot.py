@@ -19,6 +19,7 @@ from telegram import (
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputFile,
 )
 
 from telegram.ext import (
@@ -741,7 +742,7 @@ def linux_menu():
     keyboard = [
         [
             InlineKeyboardButton(
-                "📦 Debian / Ubuntu",
+                "🐧 Debian 13",
                 callback_data="linux_deb"
             )
         ],
@@ -847,32 +848,71 @@ async def button(update, context):
         return
 
     if query.data == "linux_deb":
-        LINUX_AGENT_URL = (
-            "https://github.com/BogBan-vis/crm-monitoring"
-            "/releases/download/v1.1/CRM-Agent.deb"
-        )
-
         keyboard = [
             [
                 InlineKeyboardButton(
-                    "⬇️ Скачать агент Debian 13 (.deb)",
-                    url=LINUX_AGENT_URL
+                    "⬇️ Скачать",
+                    callback_data="linux_deb_download"
                 )
             ],
             [
                 InlineKeyboardButton(
-                    "◀️ Назад",
-                    callback_data="linux_download"
+                    "❌ Отмена",
+                    callback_data="linux_deb_cancel"
                 )
             ]
         ]
 
         await query.message.reply_text(
-            "🐧 Linux — Debian 13 / Ubuntu\n\n"
-            "Нажмите кнопку ниже, чтобы скачать установочный пакет CRM Monitoring Agent.\n\n"
-            "После скачивания откройте файл CRM-Agent.deb и установите его.",
+            "🐧 Debian 13\n\n"
+            "Скачать установочный пакет CRM Monitoring Agent?",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
+        return
+
+    if query.data == "linux_deb_cancel":
+        await query.message.reply_text(
+            "Загрузка отменена.",
+            reply_markup=linux_menu()
+        )
+        return
+
+    if query.data == "linux_deb_download":
+        LINUX_AGENT_URL = (
+            "https://github.com/BogBan-vis/crm-monitoring"
+            "/releases/download/v1.1/CRM-Agent.deb"
+        )
+
+        try:
+            def download_linux_agent():
+                request = urllib.request.Request(
+                    LINUX_AGENT_URL,
+                    headers={"User-Agent": "CRM-Monitoring-Telegram-Bot"}
+                )
+                with urllib.request.urlopen(request, timeout=60) as response:
+                    return response.read()
+
+            package_data = await asyncio.to_thread(download_linux_agent)
+
+            if not package_data:
+                raise RuntimeError("Downloaded Debian package is empty")
+
+            package_file = InputFile(
+                package_data,
+                filename="CRM-Agent.deb"
+            )
+
+            await query.message.reply_document(
+                document=package_file,
+                caption="🐧 CRM Monitoring Agent для Debian 13"
+            )
+
+        except Exception as error:
+            print("LINUX PACKAGE DOWNLOAD ERROR:", repr(error), flush=True)
+            await query.message.reply_text(
+                "Не удалось отправить пакет. Попробуйте ещё раз позже."
+            )
+
         return
 
     if query.data == "pair":
@@ -1049,7 +1089,7 @@ async def registration_code(update, context):
 
     if result.get("status") != "ok":
         await update.message.reply_text(
-            "❌Код недействителен, "
+            "❌ Код недействителен, "
             "истёк или уже использован.",
             reply_markup=main_menu()
         )
